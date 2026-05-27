@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+
+# Build output / wrangler cache
+.wrangler/
+dist/
+.dev.vars
+
+# Generated KB bundle (built at deploy time from help.yammbo.com)
+# Keep committed for now so deploy doesn't need help repo
+# src/kb-bundle.json
+
+# Secrets and envs
+.env
+.env.*
+*.secret
+*.pem
+*.key
+*.crt
+*.token
+
+# Backups / tmp
+*.bak
+*.backup
+*.pre-*
+*.tmp
+*.swp
+*~
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Logs
+*.log

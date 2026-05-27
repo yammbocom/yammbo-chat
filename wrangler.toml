@@ -1,0 +1,30 @@
+name = "yammbo-chat"
+main = "src/index.ts"
+compatibility_date = "2026-01-15"
+compatibility_flags = ["nodejs_compat"]
+
+# Production route — bound after DNS is set up
+# Uncomment after creating chat.yammbo.com DNS record
+# [[routes]]
+# pattern = "chat.yammbo.com/api/*"
+# zone_name = "yammbo.com"
+
+# KV namespace for session conversation history.
+# Run once: wrangler kv:namespace create CHAT_SESSIONS
+# then paste the returned id below.
+# [[kv_namespaces]]
+# binding = "CHAT_SESSIONS"
+# id = "REPLACE_WITH_KV_ID"
+
+# Secrets (set via: wrangler secret put GROQ_API_KEY)
+# - GROQ_API_KEY
+
+[vars]
+# Non-secret config
+ALLOWED_ORIGINS = "https://yammbo.com,https://web.yammbo.com,https://pos.yammbo.com,https://music.yammbo.com,https://store.yammbo.com,https://flow.yammbo.com,https://tv.yammbo.com,https://blog.yammbo.com,https://help.yammbo.com,https://frank.yammbo.com,https://app.yammbo.com"
+GROQ_MODEL = "llama-3.3-70b-versatile"
+MAX_HISTORY_MESSAGES = "12"
+SESSION_TTL_SECONDS = "3600"
+
+[observability]
+enabled = true
