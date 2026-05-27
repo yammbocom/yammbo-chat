@@ -3,18 +3,14 @@ main = "src/index.ts"
 compatibility_date = "2026-01-15"
 compatibility_flags = ["nodejs_compat"]
 
-# Production route — bound after DNS is set up
-# Uncomment after creating chat.yammbo.com DNS record
-# [[routes]]
-# pattern = "chat.yammbo.com/api/*"
-# zone_name = "yammbo.com"
+# Custom domain bound via API REST (see post-deploy step in README)
+# Wrangler v3 with this token tries the /zones/.../workers/routes endpoint
+# which the current API token doesn't have scope for. Setting up the
+# custom domain via /accounts/.../workers/domains works fine.
 
-# KV namespace for session conversation history.
-# Run once: wrangler kv:namespace create CHAT_SESSIONS
-# then paste the returned id below.
-# [[kv_namespaces]]
-# binding = "CHAT_SESSIONS"
-# id = "REPLACE_WITH_KV_ID"
+[[kv_namespaces]]
+binding = "CHAT_SESSIONS"
+id = "fa47f766a3ad426a84e721ab4ae14016"
 
 # Secrets (set via: wrangler secret put GROQ_API_KEY)
 # - GROQ_API_KEY
