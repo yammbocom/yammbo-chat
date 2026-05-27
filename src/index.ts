@@ -1,11 +1,21 @@
 // index.ts — Worker entry point.
 // Routes:
-//   GET  /              healthcheck (returns short status JSON)
-//   POST /api/chat      chat endpoint, streams response
-//   OPTIONS *           CORS preflight
+//   GET  /             healthcheck
+//   GET  /widget.js    embeddable chat widget (vanilla JS)
+//   GET  /demo         standalone demo page that loads the widget
+//   POST /api/chat     chat endpoint, streams response
+//   OPTIONS *          CORS preflight
 
 import { buildCorsHeaders, handlePreflight } from './cors';
-import { detectLanguage, buildSystemPrompt, streamGroq, type ChatMessage, type BrainEnv } from './brain';
+import {
+  detectLanguage,
+  buildSystemPrompt,
+  streamReply,
+  type ChatMessage,
+  type BrainEnv,
+} from './brain';
+import { WIDGET_JS } from './widget';
+import { DEMO_HTML } from './demo';
 
 interface Env extends BrainEnv {
   ALLOWED_ORIGINS: string;
@@ -37,7 +47,6 @@ function validateMessages(input: unknown): ChatMessage[] | null {
     if (msg.content.length === 0 || msg.content.length > 4000) return null;
     out.push({ role: msg.role, content: msg.content });
   }
-  // The last message must be from the user.
   if (out[out.length - 1].role !== 'user') return null;
   return out;
 }
@@ -51,12 +60,33 @@ export default {
       return handlePreflight(request, env.ALLOWED_ORIGINS);
     }
 
+    // Healthcheck
     if (request.method === 'GET' && url.pathname === '/') {
-      return jsonResponse({ status: 'ok', service: 'yammbo-chat', version: '0.1.0' }, 200, cors);
+      return jsonResponse({ status: 'ok', service: 'yammbo-chat', version: '0.2.0' }, 200, cors);
+    }
+
+    // Embeddable widget — public, cacheable, CORS-open so any allowed site can <script src=...>
+    if (request.method === 'GET' && url.pathname === '/widget.js') {
+      return new Response(WIDGET_JS, {
+        headers: {
+          'content-type': 'application/javascript; charset=utf-8',
+          'cache-control': 'public, max-age=300',
+          'access-control-allow-origin': '*',
+        },
+      });
+    }
+
+    // Standalone demo page (so we can validate UI without integrating into a site)
+    if (request.method === 'GET' && url.pathname === '/demo') {
+      return new Response(DEMO_HTML, {
+        headers: {
+          'content-type': 'text/html; charset=utf-8',
+          'cache-control': 'no-cache',
+        },
+      });
     }
 
     if (request.method === 'POST' && url.pathname === '/api/chat') {
-      // Allow-list check based on Origin header.
       if (cors['access-control-allow-origin'] === 'null') {
         return jsonResponse({ error: 'Origin not allowed' }, 403, cors);
       }
@@ -76,9 +106,8 @@ export default {
       const lang = detectLanguage(messages);
       const systemPrompt = buildSystemPrompt(lang);
 
-      const upstream = await streamGroq(env, systemPrompt, messages);
+      const { response: upstream } = await streamReply(env, systemPrompt, messages);
 
-      // Compose response with CORS headers preserved.
       const headers = new Headers(upstream.headers);
       for (const [k, v] of Object.entries(cors)) headers.set(k, v);
       return new Response(upstream.body, { status: upstream.status, headers });
