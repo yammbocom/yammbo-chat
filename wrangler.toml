@@ -17,7 +17,7 @@ id = "fa47f766a3ad426a84e721ab4ae14016"
 
 [vars]
 # Non-secret config
-ALLOWED_ORIGINS = "https://yammbo.com,https://web.yammbo.com,https://pos.yammbo.com,https://music.yammbo.com,https://store.yammbo.com,https://flow.yammbo.com,https://tv.yammbo.com,https://blog.yammbo.com,https://help.yammbo.com,https://frank.yammbo.com,https://app.yammbo.com"
+ALLOWED_ORIGINS = "https://chat.yammbo.com,https://yammbo.com,https://web.yammbo.com,https://pos.yammbo.com,https://music.yammbo.com,https://store.yammbo.com,https://flow.yammbo.com,https://tv.yammbo.com,https://blog.yammbo.com,https://help.yammbo.com,https://frank.yammbo.com,https://app.yammbo.com"
 GROQ_MODEL = "llama-3.3-70b-versatile"
 MAX_HISTORY_MESSAGES = "12"
 SESSION_TTL_SECONDS = "3600"
