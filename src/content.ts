@@ -74,9 +74,9 @@ function parseRss(xml: string, limit: number): BlogPost[] {
 // blog and to keep the widget snappy.
 export async function getBlogPosts(
   kv: KVNamespace | undefined,
-  limit = 6,
+  limit = 12,
 ): Promise<BlogPost[]> {
-  const CACHE_KEY = 'blog-posts-v1';
+  const CACHE_KEY = 'blog-posts-v2';
   if (kv) {
     const cached = await kv.get(CACHE_KEY, 'json');
     if (cached) return cached as BlogPost[];

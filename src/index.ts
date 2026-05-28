@@ -120,7 +120,7 @@ export default {
 
     // Blog recent posts
     if (request.method === 'GET' && url.pathname === '/api/blog') {
-      const posts = await getBlogPosts(env.CHAT_SESSIONS, 6);
+      const posts = await getBlogPosts(env.CHAT_SESSIONS, 12);
       return jsonResponse({ posts }, 200, { ...cors, 'cache-control': 'public, max-age=600' });
     }
 

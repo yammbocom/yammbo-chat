@@ -193,17 +193,29 @@ export const WIDGET_JS = `(function () {
   root.appendChild(panel);
 
   // State ----------------------------------------------------------------
-  var history = loadHistory();
+  var chatLog = loadHistory();
   var busy = false;
   var docsCache = null;
-  var view = 'home';
+  // Navigation stack — drives both rendering and the device back button.
+  // Bottom of the stack is always 'home'. Each forward navigation pushes a
+  // browser history entry so the hardware/browser Back button unwinds the
+  // widget view-by-view, and only closes the site once the widget is closed.
+  var stack = [{ v: 'home' }];
+
+  function isOpen() { return !panel.classList.contains('yc-hidden'); }
+  function topView() { return stack[stack.length - 1]; }
+  function renderTop() { var s = topView(); render(s.v, s.param); }
 
   // Render scaffolding ---------------------------------------------------
   function clear() { panel.innerHTML = ''; }
   function header(title, opts) {
     opts = opts || {};
     var h = el('<div class="yc-head"></div>');
-    if (opts.back) { var b = el('<button class="yc-iconbtn" aria-label="' + t.back + '">' + IC.back + '</button>'); b.addEventListener('click', opts.back); h.appendChild(b); }
+    if (opts.back) {
+      var b = el('<button class="yc-iconbtn" aria-label="' + t.back + '">' + IC.back + '</button>');
+      b.addEventListener('click', navBack);
+      h.appendChild(b);
+    }
     var titleEl = el('<div style="flex:1"><h3 style="margin:0">' + esc(title) + '</h3>' + (opts.sub ? '<p>' + esc(opts.sub) + '</p>' : '') + '</div>');
     h.appendChild(titleEl);
     var c = el('<button class="yc-iconbtn" aria-label="' + t.close + '">' + IC.close + '</button>');
@@ -213,15 +225,27 @@ export const WIDGET_JS = `(function () {
   function bottomNav(active) {
     var nav = el('<div class="yc-nav"></div>');
     var bHome = el('<button class="' + (active === 'home' ? 'yc-active' : '') + '">' + IC.home + '<span>' + t.navHome + '</span></button>');
-    bHome.addEventListener('click', function () { go('home'); });
+    bHome.addEventListener('click', navToHome);
     var bChat = el('<button class="' + (active === 'chat' ? 'yc-active' : '') + '">' + IC.chat + '<span>' + t.navChat + '</span></button>');
-    bChat.addEventListener('click', function () { go('chat'); });
+    bChat.addEventListener('click', function () { if (topView().v !== 'chat') go('chat'); });
     nav.appendChild(bHome); nav.appendChild(bChat);
     return nav;
   }
 
-  // Views ----------------------------------------------------------------
-  function go(v, param) { view = v; render(v, param); }
+  // Navigation -----------------------------------------------------------
+  // Forward navigation: push a view and a matching browser history entry.
+  function go(v, param) {
+    stack.push({ v: v, param: param });
+    window.history.pushState({ yc: stack.length }, '');
+    render(v, param);
+  }
+  // Back arrow / device back: ask the browser to go back; popstate unwinds.
+  function navBack() { window.history.back(); }
+  // Bottom-nav Home: collapse the stack down to home in one shot.
+  function navToHome() {
+    var extra = stack.length - 1;
+    if (extra > 0) window.history.go(-extra); // popstate handler unwinds each level
+  }
 
   function render(v, param) {
     clear();
@@ -259,7 +283,7 @@ export const WIDGET_JS = `(function () {
   }
 
   async function renderHelp(query) {
-    panel.appendChild(header(t.secHelp, { back: function () { go('home'); } }));
+    panel.appendChild(header(t.secHelp, { back: true }));
     var wrap = el('<div class="yc-view"></div>');
     var sw = el('<div style="padding:12px 12px 4px"></div>');
     var si = el('<input class="yc-search" style="color:#111;border:1px solid #ddd" type="text" placeholder="' + t.search + '" value="' + esc(query) + '">');
@@ -286,7 +310,7 @@ export const WIDGET_JS = `(function () {
   }
 
   async function renderArticle(slug) {
-    panel.appendChild(header(t.secHelp, { back: function () { go('help', ''); } }));
+    panel.appendChild(header(t.secHelp, { back: true }));
     var wrap = el('<div class="yc-view"></div>');
     var art = el('<div class="yc-article"><div class="yc-muted">…</div></div>'); wrap.appendChild(art);
     panel.appendChild(wrap); panel.appendChild(bottomNav('home'));
@@ -298,7 +322,7 @@ export const WIDGET_JS = `(function () {
   }
 
   async function renderBlog() {
-    panel.appendChild(header(t.secBlog, { back: function () { go('home'); } }));
+    panel.appendChild(header(t.secBlog, { back: true }));
     var wrap = el('<div class="yc-view"></div>');
     var list = el('<div class="yc-list"><div class="yc-muted">…</div></div>'); wrap.appendChild(list);
     panel.appendChild(wrap); panel.appendChild(bottomNav('home'));
@@ -312,13 +336,16 @@ export const WIDGET_JS = `(function () {
         li.addEventListener('click', function () { window.open(p.link, '_blank', 'noopener'); });
         list.appendChild(li);
       });
+      var all = el('<button class="yc-li" style="justify-content:center;color:#111;font-weight:600;font-size:13px">' + esc(t.readMore) + '</button>');
+      all.addEventListener('click', function () { window.open('https://blog.yammbo.com/', '_blank', 'noopener'); });
+      list.appendChild(all);
     } catch (_) { list.innerHTML = '<div class="yc-muted">' + t.errGeneric + '</div>'; }
   }
 
   // Chat -----------------------------------------------------------------
   var chatBody = null;
   function renderChat() {
-    panel.appendChild(header(t.secChat, { back: function () { go('home'); }, sub: t.secChatSub }));
+    panel.appendChild(header(t.secChat, { back: true, sub: t.secChatSub }));
     var wrap = el('<div class="yc-view yc-chatview"></div>');
     chatBody = el('<div class="yc-body" aria-live="polite"></div>');
     wrap.appendChild(chatBody);
@@ -339,8 +366,8 @@ export const WIDGET_JS = `(function () {
   }
   function paintChat() {
     chatBody.innerHTML = '';
-    if (!history.length) { chatBody.appendChild(el('<div class="yc-muted">' + t.chatEmpty + '</div>')); return; }
-    history.forEach(function (m) { addMsg(m.role, m.content, false); });
+    if (!chatLog.length) { chatBody.appendChild(el('<div class="yc-muted">' + t.chatEmpty + '</div>')); return; }
+    chatLog.forEach(function (m) { addMsg(m.role, m.content, false); });
     chatBody.scrollTop = chatBody.scrollHeight;
   }
   function addMsg(role, content, persist) {
@@ -348,7 +375,7 @@ export const WIDGET_JS = `(function () {
     e.className = 'yc-msg ' + (role === 'user' ? 'yc-user' : 'yc-asst');
     e.innerHTML = role === 'user' ? esc(content) : md(content);
     chatBody.appendChild(e); chatBody.scrollTop = chatBody.scrollHeight;
-    if (persist) { history.push({ role: role, content: content }); saveHistory(history); }
+    if (persist) { chatLog.push({ role: role, content: content }); saveHistory(chatLog); }
     return e;
   }
   function addHandoffButton() {
@@ -363,13 +390,13 @@ export const WIDGET_JS = `(function () {
     var text = input.value.trim(); if (!text) return;
     busy = true;
     input.value = ''; input.style.height = 'auto';
-    if (!history.length) chatBody.innerHTML = '';
+    if (!chatLog.length) chatBody.innerHTML = '';
     addMsg('user', text, true);
     var typing = showTyping();
     var msgEl = null, buf = '';
     try {
       var res = await fetch(API, { method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sessionId: sessionId(), messages: history.map(function (m) { return { role: m.role, content: m.content }; }) }) });
+        body: JSON.stringify({ sessionId: sessionId(), messages: chatLog.map(function (m) { return { role: m.role, content: m.content }; }) }) });
       if (!res.ok || !res.body) { var et = await res.text(); typing.remove(); addMsg('asst', '⚠️ ' + friendlyErr(et), false); busy = false; return; }
       var reader = res.body.getReader(), dec = new TextDecoder(), sse = '';
       while (true) {
@@ -386,7 +413,7 @@ export const WIDGET_JS = `(function () {
       var hadHandoff = /\\[\\[HANDOFF\\]\\]/.test(buf);
       var clean = stripHandoff(buf);
       if (msgEl) msgEl.innerHTML = md(clean);
-      if (clean) { history.push({ role: 'assistant', content: clean }); saveHistory(history); }
+      if (clean) { chatLog.push({ role: 'assistant', content: clean }); saveHistory(chatLog); }
       if (!msgEl) { typing.remove(); addMsg('asst', '⚠️ ' + t.errNoReply, false); }
       if (hadHandoff) addHandoffButton();
     } catch (e) { typing.remove(); addMsg('asst', '⚠️ ' + t.errNetwork, false); }
@@ -396,7 +423,7 @@ export const WIDGET_JS = `(function () {
 
   // Lead form ------------------------------------------------------------
   function renderForm() {
-    panel.appendChild(header(t.formTitle, { back: function () { go('chat'); } }));
+    panel.appendChild(header(t.formTitle, { back: true }));
     var wrap = el('<div class="yc-view"></div>');
     var f = el('<div class="yc-form"></div>');
     f.appendChild(el('<div class="yc-fh"><b>' + esc(t.formTitle) + '</b><p>' + esc(t.formSub) + '</p></div>'));
@@ -423,9 +450,9 @@ export const WIDGET_JS = `(function () {
         var res = await fetch(BASE + '/api/lead', { method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ name: name, email: email, phone: fPhone.querySelector('input').value.trim(),
             channel: fChan.querySelector('select').value, message: fMsg.querySelector('textarea').value.trim(),
-            transcript: history.slice(-8), lang: lang }) });
+            transcript: chatLog.slice(-8), lang: lang }) });
         var j = await res.json().catch(function () { return {}; });
-        clear(); panel.appendChild(header(t.formTitle, { back: function () { go('chat'); } }));
+        clear(); panel.appendChild(header(t.formTitle, { back: true }));
         var w2 = el('<div class="yc-view"><div class="yc-result">' + (res.ok && j.ok ? '✅ ' + esc(t.fOk) : '⚠️ ' + esc(t.fErr)) + '</div></div>');
         panel.appendChild(w2); panel.appendChild(bottomNav('chat'));
       } catch (e) {
@@ -440,7 +467,32 @@ export const WIDGET_JS = `(function () {
   }
 
   // Open/close -----------------------------------------------------------
-  function open() { panel.classList.remove('yc-hidden'); render(view); }
-  function close() { panel.classList.add('yc-hidden'); }
-  bubble.addEventListener('click', function () { panel.classList.contains('yc-hidden') ? open() : close(); });
+  function open() {
+    if (isOpen()) return;
+    panel.classList.remove('yc-hidden');
+    stack = [{ v: 'home' }];
+    window.history.pushState({ yc: 1 }, ''); // sentinel: widget open at home
+    render('home');
+  }
+  function close() {
+    if (!isOpen()) return;
+    var depth = stack.length; // number of history entries we pushed
+    panel.classList.add('yc-hidden');
+    stack = [{ v: 'home' }];
+    // Unwind the entries we added so the site's own history stays intact.
+    if (depth > 0) window.history.go(-depth);
+  }
+  // Device / browser Back button: unwind the widget view-by-view, then close.
+  window.addEventListener('popstate', function () {
+    if (!isOpen()) return; // not ours — let the browser navigate the site
+    if (stack.length > 1) {
+      stack.pop();
+      renderTop();
+    } else {
+      // At home: the browser already consumed our sentinel; just hide.
+      panel.classList.add('yc-hidden');
+      stack = [{ v: 'home' }];
+    }
+  });
+  bubble.addEventListener('click', function () { isOpen() ? close() : open(); });
 })();`;
