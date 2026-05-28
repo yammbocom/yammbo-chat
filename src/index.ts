@@ -1,10 +1,14 @@
 // index.ts — Worker entry point.
 // Routes:
-//   GET  /             healthcheck
-//   GET  /widget.js    embeddable chat widget (vanilla JS)
-//   GET  /demo         standalone demo page that loads the widget
-//   POST /api/chat     chat endpoint, streams response
-//   OPTIONS *          CORS preflight
+//   GET  /                healthcheck
+//   GET  /widget.js       embeddable chat widget (vanilla JS)
+//   GET  /demo            standalone demo page
+//   GET  /api/docs        Help Center index (?lang=en|es)
+//   GET  /api/docs?slug=X single doc with body
+//   GET  /api/blog        recent blog posts
+//   POST /api/chat        chat endpoint, streams response
+//   POST /api/lead        human handoff — captures lead + notifies Yambo
+//   OPTIONS *             CORS preflight
 
 import { buildCorsHeaders, handlePreflight } from './cors';
 import {
@@ -14,10 +18,12 @@ import {
   type ChatMessage,
   type BrainEnv,
 } from './brain';
+import { listDocs, getDoc, getBlogPosts } from './content';
+import { alertLead, type NotifyEnv } from './notify';
 import { WIDGET_JS } from './widget';
 import { DEMO_HTML } from './demo';
 
-interface Env extends BrainEnv {
+interface Env extends BrainEnv, NotifyEnv {
   ALLOWED_ORIGINS: string;
   CHAT_SESSIONS?: KVNamespace;
   SESSION_TTL_SECONDS: string;
@@ -28,10 +34,20 @@ interface ChatRequestBody {
   sessionId?: string;
 }
 
-function jsonResponse(data: unknown, status: number, corsHeaders: Record<string, string>): Response {
+interface LeadRequestBody {
+  name?: string;
+  email?: string;
+  phone?: string;
+  channel?: string;
+  message?: string;
+  transcript?: ChatMessage[];
+  lang?: string;
+}
+
+function jsonResponse(data: unknown, status: number, extra: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { 'content-type': 'application/json', ...corsHeaders },
+    headers: { 'content-type': 'application/json', ...extra },
   });
 }
 
@@ -51,6 +67,13 @@ function validateMessages(input: unknown): ChatMessage[] | null {
   return out;
 }
 
+function pickLang(url: URL, fallback: ChatMessage[] | null = null): 'en' | 'es' {
+  const q = url.searchParams.get('lang');
+  if (q === 'es' || q === 'en') return q;
+  if (fallback) return detectLanguage(fallback);
+  return 'en';
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -62,10 +85,10 @@ export default {
 
     // Healthcheck
     if (request.method === 'GET' && url.pathname === '/') {
-      return jsonResponse({ status: 'ok', service: 'yammbo-chat', version: '0.2.0' }, 200, cors);
+      return jsonResponse({ status: 'ok', service: 'yammbo-chat', version: '0.3.0' }, 200, cors);
     }
 
-    // Embeddable widget — public, cacheable, CORS-open so any allowed site can <script src=...>
+    // Embeddable widget — public, cacheable
     if (request.method === 'GET' && url.pathname === '/widget.js') {
       return new Response(WIDGET_JS, {
         headers: {
@@ -76,41 +99,106 @@ export default {
       });
     }
 
-    // Standalone demo page (so we can validate UI without integrating into a site)
+    // Standalone demo page
     if (request.method === 'GET' && url.pathname === '/demo') {
       return new Response(DEMO_HTML, {
-        headers: {
-          'content-type': 'text/html; charset=utf-8',
-          'cache-control': 'no-cache',
-        },
+        headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' },
       });
     }
 
+    // Help Center: index or single doc
+    if (request.method === 'GET' && url.pathname === '/api/docs') {
+      const lang = pickLang(url);
+      const slug = url.searchParams.get('slug');
+      if (slug) {
+        const doc = getDoc(lang, slug);
+        if (!doc) return jsonResponse({ error: 'Doc not found' }, 404, cors);
+        return jsonResponse(doc, 200, { ...cors, 'cache-control': 'public, max-age=600' });
+      }
+      return jsonResponse({ docs: listDocs(lang) }, 200, { ...cors, 'cache-control': 'public, max-age=600' });
+    }
+
+    // Blog recent posts
+    if (request.method === 'GET' && url.pathname === '/api/blog') {
+      const posts = await getBlogPosts(env.CHAT_SESSIONS, 6);
+      return jsonResponse({ posts }, 200, { ...cors, 'cache-control': 'public, max-age=600' });
+    }
+
+    // Chat
     if (request.method === 'POST' && url.pathname === '/api/chat') {
       if (cors['access-control-allow-origin'] === 'null') {
         return jsonResponse({ error: 'Origin not allowed' }, 403, cors);
       }
-
       let body: ChatRequestBody;
       try {
         body = (await request.json()) as ChatRequestBody;
       } catch {
         return jsonResponse({ error: 'Invalid JSON body' }, 400, cors);
       }
-
       const messages = validateMessages(body.messages);
-      if (!messages) {
-        return jsonResponse({ error: 'Invalid messages array' }, 400, cors);
-      }
+      if (!messages) return jsonResponse({ error: 'Invalid messages array' }, 400, cors);
 
       const lang = detectLanguage(messages);
       const systemPrompt = buildSystemPrompt(lang);
-
       const { response: upstream } = await streamReply(env, systemPrompt, messages);
 
       const headers = new Headers(upstream.headers);
       for (const [k, v] of Object.entries(cors)) headers.set(k, v);
       return new Response(upstream.body, { status: upstream.status, headers });
+    }
+
+    // Lead capture / human handoff
+    if (request.method === 'POST' && url.pathname === '/api/lead') {
+      if (cors['access-control-allow-origin'] === 'null') {
+        return jsonResponse({ error: 'Origin not allowed' }, 403, cors);
+      }
+      let body: LeadRequestBody;
+      try {
+        body = (await request.json()) as LeadRequestBody;
+      } catch {
+        return jsonResponse({ error: 'Invalid JSON body' }, 400, cors);
+      }
+
+      const name = (body.name || '').trim().slice(0, 120);
+      const email = (body.email || '').trim().slice(0, 160);
+      if (!name || !email) {
+        return jsonResponse({ error: 'Name and email are required' }, 400, cors);
+      }
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+        return jsonResponse({ error: 'Invalid email' }, 400, cors);
+      }
+
+      const phone = (body.phone || '').trim().slice(0, 40);
+      const channel = (body.channel || '').trim().slice(0, 40);
+      const message = (body.message || '').trim().slice(0, 1000);
+
+      // Build a short transcript summary for context.
+      let summary = '—';
+      if (Array.isArray(body.transcript) && body.transcript.length) {
+        summary = body.transcript
+          .slice(-6)
+          .map((m) => `${m.role === 'user' ? 'U' : 'A'}: ${String(m.content).slice(0, 160)}`)
+          .join('\n')
+          .slice(0, 1500);
+      }
+
+      const fields: Record<string, string> = {
+        Nombre: name,
+        Email: email,
+        'Teléfono / WhatsApp': phone || 'no proporcionado',
+        'Canal preferido': channel || '—',
+        Mensaje: message || '—',
+        Resumen: summary,
+      };
+
+      const results = await alertLead(env, { title: 'Nuevo lead desde el chat web', fields });
+      const anyOk = Object.values(results).some((r) => r.ok);
+
+      return jsonResponse(
+        { ok: anyOk, channels: results },
+        anyOk ? 200 : 502,
+        cors,
+      );
     }
 
     return jsonResponse({ error: 'Not found' }, 404, cors);

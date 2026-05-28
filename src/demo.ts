@@ -46,11 +46,12 @@ export const DEMO_HTML = `<!DOCTYPE html>
 
   <h2>Estado</h2>
   <ul>
+    <li>Home con Centro de ayuda (búsqueda + artículos inline) y Blog (posts recientes)</li>
+    <li>Handoff a humano: el bot ofrece contacto y abre formulario (nombre/email/teléfono/canal)</li>
     <li>Brain: Groq Llama 3.3 70B → fallback Gemini 2.0 Flash en 429</li>
     <li>Base de conocimiento: 28 docs (EN+ES) de help.yammbo.com</li>
-    <li>Idioma: detección automática EN/ES por mensaje</li>
-    <li>Streaming SSE para sentir respuesta en vivo</li>
-    <li>Historial: localStorage del navegador, últimos 20 turnos</li>
+    <li>Idioma: detección automática EN/ES</li>
+    <li>Streaming SSE; historial en localStorage</li>
   </ul>
 </main>
 
