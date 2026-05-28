@@ -106,6 +106,9 @@ export const WIDGET_JS = `(function () {
     '.yc-head h3{margin:0;font-size:15px;font-weight:600;line-height:1.2;color:#111;flex:1}',
     '.yc-head p{margin:2px 0 0;font-size:12px;color:#777}',
     '.yc-iconbtn{background:transparent;border:none;cursor:pointer;color:#777;padding:5px;border-radius:6px;display:flex;align-items:center}.yc-iconbtn:hover{background:#f3f3f3;color:#111}',
+    '.yc-lang{display:flex;gap:2px;align-items:center}',
+    '.yc-lang button{background:transparent;border:none;cursor:pointer;font-size:11px;font-weight:600;color:#bbb;padding:3px 6px;border-radius:5px;font-family:inherit;letter-spacing:.03em}',
+    '.yc-lang button.yc-langon{color:#111;background:#f1f1f1}',
     '.yc-view{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;background:#fafafa}',
     '.yc-view.yc-chatview{display:flex;flex-direction:column;padding:0}',
     // home
@@ -218,9 +221,23 @@ export const WIDGET_JS = `(function () {
     }
     var titleEl = el('<div style="flex:1"><h3 style="margin:0">' + esc(title) + '</h3>' + (opts.sub ? '<p>' + esc(opts.sub) + '</p>' : '') + '</div>');
     h.appendChild(titleEl);
+    var langTog = el('<div class="yc-lang"></div>');
+    ['es', 'en'].forEach(function (L) {
+      var lb = el('<button class="' + (lang === L ? 'yc-langon' : '') + '" aria-label="' + L + '">' + L.toUpperCase() + '</button>');
+      lb.addEventListener('click', function () { if (lang !== L) setLang(L); });
+      langTog.appendChild(lb);
+    });
+    h.appendChild(langTog);
     var c = el('<button class="yc-iconbtn" aria-label="' + t.close + '">' + IC.close + '</button>');
     c.addEventListener('click', close); h.appendChild(c);
     return h;
+  }
+  // Manual language override — persists and re-renders the current view.
+  function setLang(L) {
+    lang = L; t = STR[L];
+    try { localStorage.setItem(LANG_KEY, L); } catch (_) {}
+    docsCache = null; // doc index was fetched in the previous language
+    renderTop();
   }
   function bottomNav(active) {
     var nav = el('<div class="yc-nav"></div>');
