@@ -42,6 +42,8 @@ Format of your output:
 
 You will receive the knowledge base as a series of doc summaries below this preamble.`;
 
+// Full-KB dump. Kept as the graceful fallback when retrieval is unavailable
+// (Vectorize/Workers AI hiccup) so the assistant still answers from the KB.
 export function buildKbSection(docs: Array<{ slug: string; title: string; description: string; product: string; body: string }>): string {
   if (!docs.length) return '\n\n[Knowledge base is currently empty.]';
   const lines = ['\n\n--- KNOWLEDGE BASE ---'];
@@ -52,6 +54,26 @@ export function buildKbSection(docs: Array<{ slug: string; title: string; descri
     if (d.description) lines.push(`Summary: ${d.description}`);
     lines.push('');
     lines.push(d.body);
+    lines.push('\n---');
+  }
+  return lines.join('\n');
+}
+
+// RAG path: only the chunks retrieved as most relevant to the current question.
+// Cuts the per-turn prompt from the whole KB to a handful of excerpts.
+export function buildKbSectionFromChunks(
+  chunks: Array<{ slug: string; title: string; product: string; text: string }>,
+): string {
+  if (!chunks.length) {
+    return '\n\n[No knowledge base entries matched this question. If you cannot answer from the conversation so far, say so honestly and offer to escalate to support@yammbo.com.]';
+  }
+  const lines = ['\n\n--- KNOWLEDGE BASE (most relevant excerpts for this question) ---'];
+  for (const c of chunks) {
+    lines.push(`\n### ${c.title}`);
+    lines.push(`Slug: ${c.slug}`);
+    lines.push(`Product: ${c.product}`);
+    lines.push('');
+    lines.push(c.text);
     lines.push('\n---');
   }
   return lines.join('\n');

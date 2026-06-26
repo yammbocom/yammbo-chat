@@ -14,19 +14,22 @@ import { buildCorsHeaders, handlePreflight } from './cors';
 import {
   detectLanguage,
   buildSystemPrompt,
+  buildSystemPromptFull,
   streamReply,
   type ChatMessage,
   type BrainEnv,
 } from './brain';
 import { listDocs, getDoc, getBlogPosts } from './content';
+import { retrieve, reindexKb, type RagEnv } from './rag';
 import { alertLead, type NotifyEnv } from './notify';
 import { WIDGET_JS } from './widget';
 import { DEMO_HTML } from './demo';
 
-interface Env extends BrainEnv, NotifyEnv {
+interface Env extends BrainEnv, NotifyEnv, RagEnv {
   ALLOWED_ORIGINS: string;
   CHAT_SESSIONS?: KVNamespace;
   SESSION_TTL_SECONDS: string;
+  ADMIN_KEY?: string;
 }
 
 interface ChatRequestBody {
@@ -139,12 +142,58 @@ export default {
       if (!messages) return jsonResponse({ error: 'Invalid messages array' }, 400, cors);
 
       const lang = detectLanguage(messages);
-      const systemPrompt = buildSystemPrompt(lang);
+
+      // RAG: retrieve only the chunks relevant to the latest question. If
+      // retrieval fails (Vectorize/Workers AI hiccup) fall back to the full KB
+      // so the assistant always has grounding.
+      const lastUser = messages[messages.length - 1].content;
+      let systemPrompt: string;
+      try {
+        const chunks = await retrieve(env, lastUser, lang, 6);
+        systemPrompt = buildSystemPrompt(chunks);
+      } catch (e) {
+        console.error('retrieve failed, falling back to full KB:', (e as Error)?.message);
+        systemPrompt = buildSystemPromptFull(lang);
+      }
+
       const { response: upstream } = await streamReply(env, systemPrompt, messages);
 
       const headers = new Headers(upstream.headers);
       for (const [k, v] of Object.entries(cors)) headers.set(k, v);
       return new Response(upstream.body, { status: upstream.status, headers });
+    }
+
+    // Admin: (re)build the KB vector index from the bundled docs. Guarded by a
+    // shared secret. Run after editing kb-bundle.json or on first setup.
+    if (request.method === 'POST' && url.pathname === '/admin/reindex') {
+      if (!env.ADMIN_KEY || request.headers.get('x-admin-key') !== env.ADMIN_KEY) {
+        return jsonResponse({ error: 'Forbidden' }, 403, cors);
+      }
+      try {
+        const result = await reindexKb(env);
+        return jsonResponse({ ok: true, ...result }, 200, cors);
+      } catch (e) {
+        return jsonResponse({ ok: false, error: String((e as Error)?.message || e).slice(0, 300) }, 500, cors);
+      }
+    }
+
+    // Admin: inspect what RAG retrieves for a query (diagnostics, same guard).
+    // Lets us confirm the index + lang filter without exposing the chat flow.
+    if (request.method === 'GET' && url.pathname === '/admin/retrieve') {
+      if (!env.ADMIN_KEY || request.headers.get('x-admin-key') !== env.ADMIN_KEY) {
+        return jsonResponse({ error: 'Forbidden' }, 403, cors);
+      }
+      const q = url.searchParams.get('q') || '';
+      const lang = url.searchParams.get('lang') === 'es' ? 'es' : 'en';
+      try {
+        const chunks = await retrieve(env, q, lang, 6);
+        return jsonResponse({
+          ok: true, q, lang, count: chunks.length,
+          chunks: chunks.map((c) => ({ slug: c.slug, title: c.title, score: c.score, preview: c.text.slice(0, 100) })),
+        }, 200, cors);
+      } catch (e) {
+        return jsonResponse({ ok: false, error: String((e as Error)?.message || e).slice(0, 300) }, 500, cors);
+      }
     }
 
     // Lead capture / human handoff

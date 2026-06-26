@@ -6,8 +6,9 @@
 // 2.0 Flash. The Gemini stream is repackaged into OpenAI-style SSE frames
 // so the widget client doesn't need to know which provider answered.
 
-import { BRAIN_CORE, buildKbSection } from './system-prompt';
+import { BRAIN_CORE, buildKbSection, buildKbSectionFromChunks } from './system-prompt';
 import kbBundle from './kb-bundle.json';
+import type { KbChunk } from './rag';
 
 type Lang = 'en' | 'es';
 type KbDoc = { slug: string; title: string; description: string; product: string; body: string };
@@ -25,7 +26,14 @@ export function detectLanguage(messages: ChatMessage[]): Lang {
   return esMarkers.test(` ${text} `) ? 'es' : 'en';
 }
 
-export function buildSystemPrompt(lang: Lang): string {
+// RAG path: prompt carries only the retrieved excerpts.
+export function buildSystemPrompt(chunks: KbChunk[]): string {
+  return BRAIN_CORE + buildKbSectionFromChunks(chunks);
+}
+
+// Fallback: retrieval unavailable → dump the full KB for the language so the
+// assistant still answers grounded in the KB.
+export function buildSystemPromptFull(lang: Lang): string {
   return BRAIN_CORE + buildKbSection(KB[lang] || []);
 }
 

@@ -17,8 +17,22 @@ tail_consumers = [{ service = "yammbo-tail" }]
 binding = "CHAT_SESSIONS"
 id = "fa47f766a3ad426a84e721ab4ae14016"
 
-# Secrets (set via: wrangler secret put GROQ_API_KEY)
+# Workers AI — multilingual embeddings (@cf/baai/bge-m3, 1024 dims) for RAG.
+[ai]
+binding = "AI"
+
+# Vectorize — the embedded Help Center KB. Create once with:
+#   wrangler vectorize create yammbo-kb --dimensions=1024 --metric=cosine
+#   wrangler vectorize create-metadata-index yammbo-kb --property-name=lang --type=string
+# then POST /admin/reindex to populate. Retrieval filters by the `lang` metadata.
+[[vectorize]]
+binding = "KB_INDEX"
+index_name = "yammbo-kb"
+
+# Secrets (set via: wrangler secret put <NAME>)
 # - GROQ_API_KEY
+# - GEMINI_API_KEY   fallback provider
+# - ADMIN_KEY        x-admin-key for POST /admin/reindex
 
 [vars]
 # Non-secret config
