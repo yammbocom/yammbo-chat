@@ -103,7 +103,7 @@ async function callGemini(
   // alt mode when called from inside a Worker.
   const body = buildGeminiBody(systemPrompt, history);
   const url =
-    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent' +
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent' +
     `?key=${encodeURIComponent(env.GEMINI_API_KEY)}`;
   return fetch(url, {
     method: 'POST',
@@ -134,7 +134,7 @@ function geminiToSSE(geminiJson: unknown): ReadableStream<Uint8Array> {
         id,
         object: 'chat.completion.chunk',
         created,
-        model: 'gemini-2.0-flash',
+        model: 'gemini-3.6-flash',
         choices: [{ index: 0, delta: { content }, finish_reason: null }],
       }) +
       '\n\n'
@@ -187,7 +187,14 @@ export async function streamReply(
 
   const groqStatus = groqRes.status;
   const groqErrBody = await groqRes.text().catch(() => '');
-  const shouldFallback = groqStatus === 429 || (groqStatus >= 500 && groqStatus < 600);
+  // A retired model answers 404 model_not_found on every single call. Treating
+  // that as permanent is what kept this chat serving 502s for five days after
+  // Groq shut down llama-3.3-70b-versatile on 2026-08-16: the Gemini fallback
+  // was configured and healthy, and never got asked.
+  const modelGone =
+    groqStatus === 404 && /model_not_found|does not exist|no longer/i.test(groqErrBody);
+  const shouldFallback =
+    groqStatus === 429 || modelGone || (groqStatus >= 500 && groqStatus < 600);
 
   if (!shouldFallback) {
     // Permanent error — surface it.
