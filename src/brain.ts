@@ -3,7 +3,7 @@
 // Streams the response back as Server-Sent Events.
 //
 // If Groq is rate-limited (429) or unavailable (5xx), falls back to Gemini
-// 2.0 Flash. The Gemini stream is repackaged into OpenAI-style SSE frames
+// (gemini-3.6-flash). The Gemini stream is repackaged into OpenAI-style SSE frames
 // so the widget client doesn't need to know which provider answered.
 
 import { BRAIN_CORE, buildKbSection, buildKbSectionFromChunks } from './system-prompt';
@@ -11,7 +11,7 @@ import kbBundle from './kb-bundle.json';
 import type { KbChunk } from './rag';
 
 type Lang = 'en' | 'es';
-type KbDoc = { slug: string; title: string; description: string; product: string; body: string };
+type KbDoc = { slug: string; url: string; title: string; description: string; product: string; body: string };
 type KbBundle = Record<Lang, KbDoc[]>;
 
 const KB = kbBundle as KbBundle;
@@ -31,8 +31,8 @@ export function buildSystemPrompt(chunks: KbChunk[]): string {
   return BRAIN_CORE + buildKbSectionFromChunks(chunks);
 }
 
-// Fallback: retrieval unavailable → dump the full KB for the language so the
-// assistant still answers grounded in the KB.
+// Fallback: retrieval unavailable → send an index (title, summary, URL) of the
+// language's docs; full bodies would blow Groq's TPM limit.
 export function buildSystemPromptFull(lang: Lang): string {
   return BRAIN_CORE + buildKbSection(KB[lang] || []);
 }
@@ -59,7 +59,12 @@ async function callGroq(
   const body = {
     model: env.GROQ_MODEL,
     temperature: 0.5,
-    max_tokens: 600,
+    // Reasoning tokens count against max_tokens (500 truncated a JSON answer in
+    // another worker), so keep headroom. include_reasoning:false stops Groq
+    // streaming delta.reasoning chunks to the browser.
+    max_tokens: 1000,
+    include_reasoning: false,
+    reasoning_effort: 'low',
     stream: true,
     messages: [
       { role: 'system', content: systemPrompt },
@@ -193,8 +198,10 @@ export async function streamReply(
   // was configured and healthy, and never got asked.
   const modelGone =
     groqStatus === 404 && /model_not_found|does not exist|no longer/i.test(groqErrBody);
+  // 400 too: a request Groq rejects (a parameter it stops accepting, a prompt
+  // over its limit) is still a question Gemini can answer.
   const shouldFallback =
-    groqStatus === 429 || modelGone || (groqStatus >= 500 && groqStatus < 600);
+    groqStatus === 400 || groqStatus === 429 || modelGone || (groqStatus >= 500 && groqStatus < 600);
 
   if (!shouldFallback) {
     // Permanent error — surface it.

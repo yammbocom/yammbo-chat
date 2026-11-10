@@ -1,19 +1,24 @@
 // build-kb.mjs
 // Walks help.yammbo.com docs, extracts frontmatter + body from each .mdx,
-// emits src/kb-bundle.json keyed by language: { en: [...], es: [...] }.
+// emits src/kb-bundle.json keyed by language: { en: [...], es: [...] } and
+// src/kb-version.json ({ hash, builtAt, counts }) used by the scheduled reindex
+// to detect a changed KB. Every doc carries its public `url` on help.yammbo.com.
 //
 // Run from repo root:
 //   HELP_REPO=/root/repos/help.yammbo.com node scripts/build-kb.mjs
 // Or with default path:
 //   node scripts/build-kb.mjs
 
-import { readdir, readFile, writeFile, stat } from 'node:fs/promises';
+import { readdir, readFile, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { join, relative, sep } from 'node:path';
 import matter from 'gray-matter';
 
 const HELP_REPO = process.env.HELP_REPO || '/root/repos/help.yammbo.com';
 const DOCS_ROOT = join(HELP_REPO, 'src/content/docs');
 const OUT_PATH = new URL('../src/kb-bundle.json', import.meta.url).pathname;
+const VERSION_PATH = new URL('../src/kb-version.json', import.meta.url).pathname;
+const HELP_ORIGIN = 'https://help.yammbo.com';
 
 async function walk(dir) {
   const out = [];
@@ -35,6 +40,8 @@ function stripMdx(body) {
     .filter((line) => !/^\s*<\/[A-Z][A-Za-z0-9]*>/.test(line))
     .join('\n')
     .replace(/<!--[\s\S]*?-->/g, '')
+    // Relative help-site links → absolute, so the model cites real URLs.
+    .replace(/\]\(\/docs\//g, `](${HELP_ORIGIN}/docs/`)
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
@@ -63,6 +70,7 @@ async function main() {
     const cleanBody = stripMdx(content);
     bundle[lang].push({
       slug,
+      url: `${HELP_ORIGIN}/docs/${slug}/`,
       title: data.title || slug.split('/').pop(),
       description: data.description || '',
       product: slug.split('/')[1] || 'general',
@@ -75,12 +83,21 @@ async function main() {
     bundle[lang].sort((a, b) => a.slug.localeCompare(b.slug));
   }
 
-  const totalChars = JSON.stringify(bundle).length;
-  await writeFile(OUT_PATH, JSON.stringify(bundle, null, 2));
+  const json = JSON.stringify(bundle, null, 2);
+  const totalChars = json.length;
+  await writeFile(OUT_PATH, json);
+
+  const version = {
+    hash: createHash('sha256').update(json).digest('hex'),
+    builtAt: new Date().toISOString(),
+    counts: { en: bundle.en.length, es: bundle.es.length },
+  };
+  await writeFile(VERSION_PATH, JSON.stringify(version, null, 2) + '\n');
 
   console.log(`KB bundle written: ${OUT_PATH}`);
   console.log(`  EN docs: ${bundle.en.length}`);
   console.log(`  ES docs: ${bundle.es.length}`);
+  console.log(`KB version written: ${VERSION_PATH} (${version.hash.slice(0, 12)})`);
   console.log(`  Total size: ${(totalChars / 1024).toFixed(1)} KB`);
 }
 

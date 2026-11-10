@@ -17,7 +17,7 @@
 import kbBundle from './kb-bundle.json';
 
 type Lang = 'en' | 'es';
-type KbDoc = { slug: string; title: string; description: string; product: string; body: string };
+type KbDoc = { slug: string; url: string; title: string; description: string; product: string; body: string };
 type KbBundle = Record<Lang, KbDoc[]>;
 const KB = kbBundle as KbBundle;
 

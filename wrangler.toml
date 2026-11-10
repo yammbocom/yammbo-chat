@@ -13,6 +13,16 @@ tail_consumers = [{ service = "yammbo-tail" }]
 # which the current API token doesn't have scope for. Setting up the
 # custom domain via /accounts/.../workers/domains works fine.
 
+# Re-sync Vectorize with the bundled KB when it changed (see scheduled() in src/index.ts).
+[triggers]
+crons = ["*/15 * * * *"]
+
+# Fonts served at /fonts/*.woff2 are imported as ArrayBuffers.
+[[rules]]
+type = "Data"
+globs = ["**/*.woff2"]
+fallthrough = false
+
 [[kv_namespaces]]
 binding = "CHAT_SESSIONS"
 id = "fa47f766a3ad426a84e721ab4ae14016"
@@ -36,7 +46,7 @@ index_name = "yammbo-kb"
 
 [vars]
 # Non-secret config
-ALLOWED_ORIGINS = "https://chat.yammbo.com,https://yammbo.com,https://web.yammbo.com,https://pos.yammbo.com,https://music.yammbo.com,https://store.yammbo.com,https://flow.yammbo.com,https://tv.yammbo.com,https://blog.yammbo.com,https://help.yammbo.com,https://frank.yammbo.com,https://app.yammbo.com,https://link.yammbo.com"
+ALLOWED_ORIGINS = "https://chat.yammbo.com,https://yammbo.com,https://web.yammbo.com,https://pos.yammbo.com,https://music.yammbo.com,https://store.yammbo.com,https://tv.yammbo.com,https://blog.yammbo.com,https://help.yammbo.com,https://frank.yammbo.com,https://app.yammbo.com,https://link.yammbo.com"
 GROQ_MODEL = "openai/gpt-oss-120b"
 MAX_HISTORY_MESSAGES = "12"
 SESSION_TTL_SECONDS = "3600"

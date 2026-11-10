@@ -8,7 +8,9 @@
 //   GET  /api/blog        recent blog posts
 //   POST /api/chat        chat endpoint, streams response
 //   POST /api/lead        human handoff — captures lead + notifies Yambo
+//   GET  /fonts/*.woff2   Geist latin / latin-ext for the widget (CORS *)
 //   OPTIONS *             CORS preflight
+//   scheduled (cron)      reindexes Vectorize when the bundled KB changed
 
 import { buildCorsHeaders, handlePreflight } from './cors';
 import {
@@ -24,6 +26,9 @@ import { retrieve, reindexKb, type RagEnv } from './rag';
 import { alertLead, type NotifyEnv } from './notify';
 import { WIDGET_JS } from './widget';
 import { DEMO_HTML } from './demo';
+import kbVersion from './kb-version.json';
+import geistLatin from './fonts/geist-latin.woff2';
+import geistLatinExt from './fonts/geist-latin-ext.woff2';
 
 interface Env extends BrainEnv, NotifyEnv, RagEnv {
   ALLOWED_ORIGINS: string;
@@ -31,6 +36,21 @@ interface Env extends BrainEnv, NotifyEnv, RagEnv {
   SESSION_TTL_SECONDS: string;
   ADMIN_KEY?: string;
 }
+
+// KV key holding the hash of the kb-bundle that was last indexed successfully.
+const RAG_HASH_KEY = '__rag_bundle_hash';
+const RAG_FAIL_KEY = '__rag_reindex_fail';
+
+const FONT_HEADERS = {
+  'content-type': 'font/woff2',
+  'access-control-allow-origin': '*',
+  'cache-control': 'public, max-age=31536000, immutable',
+};
+
+const FONTS: Record<string, ArrayBuffer> = {
+  '/fonts/geist-latin.woff2': geistLatin,
+  '/fonts/geist-latin-ext.woff2': geistLatinExt,
+};
 
 interface ChatRequestBody {
   messages?: ChatMessage[];
@@ -88,7 +108,7 @@ export default {
 
     // Healthcheck
     if (request.method === 'GET' && url.pathname === '/') {
-      return jsonResponse({ status: 'ok', service: 'yammbo-chat', version: '0.3.0' }, 200, cors);
+      return jsonResponse({ status: 'ok', service: 'yammbo-chat', version: '0.4.0' }, 200, cors);
     }
 
     // Embeddable widget — public, cacheable
@@ -100,6 +120,11 @@ export default {
           'access-control-allow-origin': '*',
         },
       });
+    }
+
+    // Widget fonts — served from here because the widget loads on other origins.
+    if (request.method === 'GET' && FONTS[url.pathname]) {
+      return new Response(FONTS[url.pathname], { headers: FONT_HEADERS });
     }
 
     // Standalone demo page
@@ -171,6 +196,8 @@ export default {
       }
       try {
         const result = await reindexKb(env);
+        // Remember what was indexed so the cron doesn't redo it.
+        await env.CHAT_SESSIONS?.put(RAG_HASH_KEY, kbVersion.hash);
         return jsonResponse({ ok: true, ...result }, 200, cors);
       } catch (e) {
         return jsonResponse({ ok: false, error: String((e as Error)?.message || e).slice(0, 300) }, 500, cors);
@@ -251,5 +278,38 @@ export default {
     }
 
     return jsonResponse({ error: 'Not found' }, 404, cors);
+  },
+
+  // Cron (every 15 min): reindex Vectorize when kb-bundle.json changed since the
+  // last successful reindex. The hash is stored only after a clean run, so a
+  // failed run is retried on the next tick (reindexKb is idempotent).
+  async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+    if (!env.CHAT_SESSIONS) {
+      console.log('rag cron: CHAT_SESSIONS not bound, skipping');
+      return;
+    }
+    try {
+      const indexed = await env.CHAT_SESSIONS.get(RAG_HASH_KEY);
+      if (indexed === kbVersion.hash) return;
+      // Back off after failures (15 min, 30, 60 ... capped at 24 h) so a
+      // deterministic error doesn't re-embed ~2k chunks 96 times a day.
+      const fail = JSON.parse((await env.CHAT_SESSIONS.get(RAG_FAIL_KEY)) || 'null') as { hash: string; count: number; at: number } | null;
+      if (fail && fail.hash === kbVersion.hash) {
+        const waitMs = Math.min(15 * 60_000 * 2 ** (fail.count - 1), 24 * 3600_000);
+        if (Date.now() - fail.at < waitMs) return;
+      }
+      console.log(`rag cron: KB changed (${(indexed || 'none').slice(0, 12)} -> ${kbVersion.hash.slice(0, 12)}), reindexing`);
+      const result = await reindexKb(env);
+      await env.CHAT_SESSIONS.put(RAG_HASH_KEY, kbVersion.hash);
+      await env.CHAT_SESSIONS.delete(RAG_FAIL_KEY);
+      console.log('rag cron: reindex ok', JSON.stringify({ upserted: result.upserted, deletedOrphans: result.deletedOrphans, chunks: result.chunks }));
+    } catch (e) {
+      console.log('rag cron: reindex failed', String((e as Error)?.message || e).slice(0, 300));
+      try {
+        const prev = JSON.parse((await env.CHAT_SESSIONS.get(RAG_FAIL_KEY)) || 'null') as { hash: string; count: number } | null;
+        const count = prev && prev.hash === kbVersion.hash ? prev.count + 1 : 1;
+        await env.CHAT_SESSIONS.put(RAG_FAIL_KEY, JSON.stringify({ hash: kbVersion.hash, count, at: Date.now() }));
+      } catch {}
+    }
   },
 };

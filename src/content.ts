@@ -5,16 +5,17 @@
 import kbBundle from './kb-bundle.json';
 
 type Lang = 'en' | 'es';
-type KbDoc = { slug: string; title: string; description: string; product: string; body: string };
+type KbDoc = { slug: string; url: string; title: string; description: string; product: string; body: string };
 type KbBundle = Record<Lang, KbDoc[]>;
 const KB = kbBundle as KbBundle;
 
 // ─── Docs ─────────────────────────────────────────────────────────────────
 
 // Returns lightweight doc index (no body) for the Help Center list/search.
-export function listDocs(lang: Lang): Array<{ slug: string; title: string; description: string; product: string }> {
+export function listDocs(lang: Lang): Array<{ slug: string; url: string; title: string; description: string; product: string }> {
   return (KB[lang] || []).map((d) => ({
     slug: d.slug,
+    url: d.url,
     title: d.title,
     description: d.description,
     product: d.product,
