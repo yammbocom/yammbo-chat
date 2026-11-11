@@ -17,10 +17,11 @@ tail_consumers = [{ service = "yammbo-tail" }]
 [triggers]
 crons = ["*/15 * * * *"]
 
-# Fonts served at /fonts/*.woff2 are imported as ArrayBuffers.
+# Fonts served at /fonts/*.woff2 and the panel PWA icons (src/panel-icons/*.png)
+# are imported as ArrayBuffers.
 [[rules]]
 type = "Data"
-globs = ["**/*.woff2"]
+globs = ["**/*.woff2", "**/*.png"]
 fallthrough = false
 
 [[kv_namespaces]]
@@ -39,14 +40,15 @@ binding = "AI"
 binding = "KB_INDEX"
 index_name = "yammbo-kb"
 
-# D1 — chat transcripts, leads and feedback (retention handled in scheduled()).
-# Schema: migrations/0001_init.sql
+# D1 — chat transcripts, leads, feedback, panel page views and push subscriptions
+# (retention handled in scheduled()). Schema: migrations/0001_init.sql, 0002_panel.sql
 [[d1_databases]]
 binding = "DB"
 database_name = "yammbo-chat"
 database_id = "934ca26c-f303-4628-8ce4-90d1df9d9910"
 
-# Workers Rate Limiting (per CF-Connecting-IP). Chat + feedback share one budget.
+# Workers Rate Limiting (per CF-Connecting-IP). Chat + feedback share one budget;
+# POST /api/visit has its own so page tracking never eats the chat's allowance.
 [[unsafe.bindings]]
 name = "CHAT_LIMITER"
 type = "ratelimit"
@@ -59,10 +61,20 @@ type = "ratelimit"
 namespace_id = "1002"
 simple = { limit = 3, period = 60 }
 
+[[unsafe.bindings]]
+name = "VISIT_LIMITER"
+type = "ratelimit"
+namespace_id = "1003"
+simple = { limit = 40, period = 60 }
+
 # Secrets (set via: wrangler secret put <NAME>)
 # - GROQ_API_KEY
 # - GEMINI_API_KEY   fallback provider
 # - ADMIN_KEY        x-admin-key for POST /admin/reindex
+# - TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID   lead alerts, new-conversation alerts and the /panel login code
+# - IP_SALT          salt for the daily ip_hash and the panel's login throttling
+# Local only (.dev.vars, never a production secret): PANEL_DEV_CODE=<8 characters of 23456789ABCDEFGHJKMNPQRSTUVWXYZ>
+#   lets /panel login without Telegram, and only for localhost/127.0.0.1 requests.
 
 [vars]
 # Non-secret config

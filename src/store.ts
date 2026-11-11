@@ -11,6 +11,8 @@ const MAX_CONTENT = 4000;
 const DAY_MS = 24 * 3600_000;
 const RETENTION_CHAT_DAYS = 90;
 const RETENTION_LEADS_DAYS = 365;
+// A page view of the same session+url inside this window is not stored again.
+const VISIT_DEDUPE_MS = 30 * 60_000;
 
 export interface StoreEnv {
   DB?: D1Database;
@@ -76,13 +78,25 @@ export interface ChatTurn {
   ragHits: number;
   provider: string;
   startedAt: number;
+  // Coarse, derived from the request (see device.ts); only used when the conversation is created.
+  country: string | null;
+  city: string | null;
+  device: string | null;
+  os: string | null;
+  browser: string | null;
+}
+
+export interface PersistResult {
+  // True when this turn created the conversation row (first turn of the session).
+  isNew: boolean;
 }
 
 // Consumes the teed response branch, then writes the user message, the
-// assistant message and the conversation upsert in one batch.
-export async function persistChatTurn(env: StoreEnv, turn: ChatTurn): Promise<void> {
+// assistant message and the conversation upsert in one batch. Returns null when
+// nothing was stored.
+export async function persistChatTurn(env: StoreEnv, turn: ChatTurn): Promise<PersistResult | null> {
   const db = env.DB;
-  if (!db) return;
+  if (!db) return null;
   try {
     const raw = await readSseText(turn.stream);
     const latency = Date.now() - turn.startedAt;
@@ -93,8 +107,8 @@ export async function persistChatTurn(env: StoreEnv, turn: ChatTurn): Promise<vo
 
     const stmts: D1PreparedStatement[] = [
       db
-        .prepare('INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)')
-        .bind(crypto.randomUUID(), turn.sessionId, 'user', turn.userContent.slice(0, MAX_CONTENT), now),
+        .prepare('INSERT INTO messages (id, session_id, role, content, created_at, page_url) VALUES (?, ?, ?, ?, ?, ?)')
+        .bind(crypto.randomUUID(), turn.sessionId, 'user', turn.userContent.slice(0, MAX_CONTENT), now, turn.page?.url ?? null),
     ];
     let added = 1;
     if (assistant) {
@@ -110,20 +124,55 @@ export async function persistChatTurn(env: StoreEnv, turn: ChatTurn): Promise<vo
     stmts.push(
       db
         .prepare(
-          `INSERT INTO conversations (id, created_at, updated_at, page_url, product, lang, ip_hash, msg_count)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO conversations (id, created_at, updated_at, page_url, product, lang, ip_hash, msg_count, country, city, device, os, browser)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              updated_at = excluded.updated_at,
              page_url = COALESCE(excluded.page_url, conversations.page_url),
              product = COALESCE(excluded.product, conversations.product),
              lang = excluded.lang,
-             msg_count = conversations.msg_count + excluded.msg_count`,
+             msg_count = conversations.msg_count + excluded.msg_count,
+             country = COALESCE(conversations.country, excluded.country),
+             city = COALESCE(conversations.city, excluded.city),
+             device = COALESCE(conversations.device, excluded.device),
+             os = COALESCE(conversations.os, excluded.os),
+             browser = COALESCE(conversations.browser, excluded.browser)
+           RETURNING created_at`,
         )
-        .bind(turn.sessionId, now, now, turn.page?.url ?? null, turn.page?.product ?? null, turn.lang, hash, added),
+        .bind(
+          turn.sessionId, now, now, turn.page?.url ?? null, turn.page?.product ?? null, turn.lang, hash, added,
+          turn.country, turn.city, turn.device, turn.os, turn.browser,
+        ),
     );
-    await db.batch(stmts);
+    const res = await db.batch(stmts);
+    // created_at only equals `now` when this very statement inserted the row.
+    const row = res[res.length - 1].results?.[0] as { created_at?: number } | undefined;
+    return { isNew: row?.created_at === now };
   } catch (e) {
     console.error('d1 persistChatTurn failed:', (e as Error)?.message);
+    return null;
+  }
+}
+
+// Records a page the visitor opened after using the chat. The row is written
+// only when the conversation exists and the same session+url was not recorded
+// in the last 30 minutes. Callers answer 204 either way: no existence oracle.
+export async function saveVisit(env: StoreEnv, sessionId: string, url: string, title: string, now = Date.now()): Promise<boolean> {
+  if (!env.DB) return false;
+  try {
+    const res = await env.DB
+      .prepare(
+        `INSERT INTO page_views (session_id, url, title, created_at)
+         SELECT ?1, ?2, ?3, ?4
+         WHERE EXISTS (SELECT 1 FROM conversations WHERE id = ?1)
+           AND NOT EXISTS (SELECT 1 FROM page_views WHERE session_id = ?1 AND url = ?2 AND created_at > ?5)`,
+      )
+      .bind(sessionId, url, title, now, now - VISIT_DEDUPE_MS)
+      .run();
+    return (res.meta?.changes ?? 0) > 0;
+  } catch (e) {
+    console.error('d1 saveVisit failed:', (e as Error)?.message);
+    return false;
   }
 }
 
@@ -201,5 +250,13 @@ export async function purgeOld(env: StoreEnv, now = Date.now()): Promise<void> {
     console.log('retention purge ok', JSON.stringify(res.map((r) => r.meta?.changes ?? 0)));
   } catch (e) {
     console.error('retention purge failed:', (e as Error)?.message);
+  }
+  // Separate from the batch above: page_views comes from migration 0002, and a
+  // missing table (or any failure here) must not stop the chat/lead purge.
+  try {
+    const res = await env.DB.prepare('DELETE FROM page_views WHERE created_at < ?').bind(now - RETENTION_CHAT_DAYS * DAY_MS).run();
+    console.log('retention purge page_views ok', res.meta?.changes ?? 0);
+  } catch (e) {
+    console.error('retention purge page_views failed:', (e as Error)?.message);
   }
 }

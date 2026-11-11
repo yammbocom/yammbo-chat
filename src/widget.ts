@@ -808,4 +808,15 @@ export const WIDGET_JS = `(function () {
     }
   });
   bubble.addEventListener('click', function () { isOpen() ? close() : open(); });
+
+  // Page visit, reported once per page load and ONLY when this visitor already
+  // used the chat (stored history). Nobody else is tracked. The server ignores
+  // it unless the conversation exists, and keeps just the URL without query.
+  if (chatLog.length) {
+    try {
+      var pg = pageInfo();
+      fetch(BASE + '/api/visit', { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sessionId: sessionId(), url: pg.url, title: pg.title }) }).catch(function () {});
+    } catch (_) {}
+  }
 })();`;

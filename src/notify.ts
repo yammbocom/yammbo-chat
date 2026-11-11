@@ -21,9 +21,9 @@ export interface NotifyEnv {
   AGENT_ALERT_EMAIL?: string;
 }
 
-type SendResult = { ok: boolean; info: string };
+export type SendResult = { ok: boolean; info: string };
 
-function escapeHtml(s: unknown): string {
+export function escapeHtml(s: unknown): string {
   return String(s ?? '—').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
@@ -36,7 +36,7 @@ function renderValue(v: unknown, mode: 'email' | 'telegram'): string {
   return escapeHtml(s);
 }
 
-async function sendTelegram(env: NotifyEnv, text: string): Promise<SendResult> {
+export async function sendTelegram(env: NotifyEnv, text: string): Promise<SendResult> {
   if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_CHAT_ID) return { ok: false, info: 'telegram_not_configured' };
   const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: 'POST',
@@ -53,6 +53,9 @@ async function sendTelegram(env: NotifyEnv, text: string): Promise<SendResult> {
   return { ok: false, info: `telegram_${res.status}: ${body.slice(0, 200)}` };
 }
 
+// NOTE: no ZEPTOMAIL_API_TOKEN is configured today, so this channel is inactive and
+// src/privacy.ts does not mention email. If the token is ever set, update
+// privacy.ts (lead details would then also be emailed to the team).
 async function sendEmail(env: NotifyEnv, subject: string, html: string): Promise<SendResult> {
   if (!env.ZEPTOMAIL_API_TOKEN) return { ok: false, info: 'zeptomail_api_token_missing' };
   const res = await fetch('https://api.zeptomail.com/v1.1/email', {

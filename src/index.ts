@@ -9,6 +9,8 @@
 //   POST /api/chat        chat endpoint, streams response
 //   POST /api/lead        human handoff — stores the lead in D1, then notifies Yambo
 //   POST /api/feedback    thumbs up/down on an assistant message
+//   POST /api/visit       page the visitor opened after using the chat (always 204)
+//   /panel, /panel/api/*  team panel (PWA): Telegram-code login, stats, conversations, push
 //   GET  /fonts/*.woff2   Geist latin / latin-ext for the widget (CORS *)
 //   OPTIONS *             CORS preflight
 //   scheduled (cron)      reindexes Vectorize when the bundled KB changed;
@@ -26,6 +28,10 @@ import {
 import { listDocs, getDoc, getBlogPosts } from './content';
 import { retrieve, reindexKb, type RagEnv } from './rag';
 import { alertLead, type NotifyEnv } from './notify';
+import { announceNewConversation, pushNewLead } from './announce';
+import { cleanCity, cleanCountry, parseUserAgent } from './device';
+import { isRateLimited } from './limit';
+import { handlePanel, type PanelEnv } from './panel';
 import { PRODUCT_NAMES, sanitizePage, type PageContext } from './page';
 import {
   isValidId,
@@ -34,6 +40,7 @@ import {
   saveFeedback,
   saveLead,
   saveLeadNotify,
+  saveVisit,
   type StoreEnv,
 } from './store';
 import { WIDGET_JS } from './widget';
@@ -43,7 +50,7 @@ import kbVersion from './kb-version.json';
 import geistLatin from './fonts/geist-latin.woff2';
 import geistLatinExt from './fonts/geist-latin-ext.woff2';
 
-interface Env extends BrainEnv, NotifyEnv, RagEnv, StoreEnv {
+interface Env extends BrainEnv, NotifyEnv, RagEnv, StoreEnv, PanelEnv {
   ALLOWED_ORIGINS: string;
   CHAT_SESSIONS?: KVNamespace;
   SESSION_TTL_SECONDS: string;
@@ -51,6 +58,7 @@ interface Env extends BrainEnv, NotifyEnv, RagEnv, StoreEnv {
   // Workers Rate Limiting bindings; optional so a missing binding never breaks the chat.
   CHAT_LIMITER?: RateLimit;
   LEAD_LIMITER?: RateLimit;
+  VISIT_LIMITER?: RateLimit;
 }
 
 // KV key holding the hash of the kb-bundle that was last indexed successfully.
@@ -79,6 +87,12 @@ interface FeedbackRequestBody {
   sessionId?: unknown;
   messageId?: unknown;
   rating?: unknown;
+}
+
+interface VisitRequestBody {
+  sessionId?: unknown;
+  url?: unknown;
+  title?: unknown;
 }
 
 interface LeadRequestBody {
@@ -133,19 +147,6 @@ const RATE_LIMIT_MSG = {
   en: 'You are sending messages too fast. Please wait a moment and try again.',
 };
 
-// True when this client exceeded the limiter. A missing binding or a limiter
-// error never blocks anybody.
-async function isRateLimited(limiter: RateLimit | undefined, request: Request): Promise<boolean> {
-  if (!limiter) return false;
-  try {
-    const { success } = await limiter.limit({ key: request.headers.get('cf-connecting-ip') || 'unknown' });
-    return !success;
-  } catch (e) {
-    console.error('rate limiter failed:', (e as Error)?.message);
-    return false;
-  }
-}
-
 function pageLineFor(page: PageContext | null): string {
   if (!page) return '';
   // Only the hostname: the path is visitor-controlled on SPA hosts and would
@@ -160,6 +161,11 @@ export default {
     const startedAt = Date.now();
     const url = new URL(request.url);
     const cors = buildCorsHeaders(request, env.ALLOWED_ORIGINS);
+
+    // Team panel: same origin only, no CORS headers (see panel.ts).
+    if (url.pathname === '/panel' || url.pathname.startsWith('/panel/')) {
+      return handlePanel(request, env, url);
+    }
 
     if (request.method === 'OPTIONS') {
       return handlePreflight(request, env.ALLOWED_ORIGINS);
@@ -272,9 +278,15 @@ export default {
         const [toClient, toStore] = upstream.body.tee();
         outBody = toClient;
         headers.set('x-chat-msg-id', assistantId);
+        // Country/city come from Cloudflare; the User-Agent is reduced to three
+        // labels (device, OS, browser) and never stored.
+        const country = cleanCountry(request.cf?.country);
+        const city = cleanCity(request.cf?.city);
+        const client = parseUserAgent(request.headers.get('user-agent'));
+        const sessionId = body.sessionId;
         ctx.waitUntil(
           persistChatTurn(env, {
-            sessionId: body.sessionId,
+            sessionId,
             userContent: lastUser,
             assistantId,
             stream: toStore,
@@ -284,7 +296,23 @@ export default {
             ragHits,
             provider,
             startedAt,
-          }),
+            country,
+            city,
+            ...client,
+          }).then((stored) =>
+            stored?.isNew
+              ? announceNewConversation(env, {
+                  sessionId,
+                  product: page?.product ?? null,
+                  country,
+                  city,
+                  device: client.device,
+                  os: client.os,
+                  browser: client.browser,
+                  firstQuestion: lastUser,
+                })
+              : undefined,
+          ),
         );
       }
       return new Response(outBody, { status: upstream.status, headers });
@@ -309,6 +337,25 @@ export default {
       }
       const stored = await saveFeedback(env, body.sessionId, body.messageId, body.rating);
       return stored ? jsonResponse({ ok: true }, 200, cors) : jsonResponse({ ok: false }, 404, cors);
+    }
+
+    // Page visit after the visitor used the chat. Always 204: the answer must not
+    // reveal whether a session exists (and rate-limited calls are dropped quietly).
+    if (request.method === 'POST' && url.pathname === '/api/visit') {
+      if (cors['access-control-allow-origin'] === 'null') {
+        return jsonResponse({ error: 'Origin not allowed' }, 403, cors);
+      }
+      const done = new Response(null, { status: 204, headers: cors });
+      let body: VisitRequestBody;
+      try {
+        body = (await request.json()) as VisitRequestBody;
+      } catch {
+        return done;
+      }
+      if (!isValidId(body.sessionId) || (await isRateLimited(env.VISIT_LIMITER, request))) return done;
+      const page = sanitizePage({ url: body.url, title: body.title });
+      if (page) await saveVisit(env, body.sessionId, page.url, page.title);
+      return done;
     }
 
     // Admin: (re)build the KB vector index from the bundled docs. Guarded by a
@@ -419,6 +466,7 @@ export default {
       const results = await alertLead(env, { title: 'Nuevo lead desde el chat web', fields });
       const anyOk = Object.values(results).some((r) => r.ok);
       if (saved) await saveLeadNotify(env, leadId, results);
+      ctx.waitUntil(pushNewLead(env, name, channel));
 
       // The per-channel results stay server-side (D1 + logs): they carry provider error text.
       if (!anyOk) console.error('lead notify failed on every channel', JSON.stringify(results));
