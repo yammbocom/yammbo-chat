@@ -11,6 +11,7 @@ export function buildCorsHeaders(request: Request, allowedOrigins: string): Reco
     'access-control-allow-origin': isAllowed ? origin : 'null',
     'access-control-allow-methods': 'POST, OPTIONS',
     'access-control-allow-headers': 'content-type',
+    'access-control-expose-headers': 'x-chat-msg-id, x-chat-provider',
     'access-control-max-age': '86400',
     'vary': 'origin',
   };

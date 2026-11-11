@@ -27,14 +27,14 @@ export function detectLanguage(messages: ChatMessage[]): Lang {
 }
 
 // RAG path: prompt carries only the retrieved excerpts.
-export function buildSystemPrompt(chunks: KbChunk[]): string {
-  return BRAIN_CORE + buildKbSectionFromChunks(chunks);
+export function buildSystemPrompt(chunks: KbChunk[], pageLine = ''): string {
+  return BRAIN_CORE + (pageLine ? `\n\n${pageLine}` : '') + buildKbSectionFromChunks(chunks);
 }
 
 // Fallback: retrieval unavailable → send an index (title, summary, URL) of the
 // language's docs; full bodies would blow Groq's TPM limit.
-export function buildSystemPromptFull(lang: Lang): string {
-  return BRAIN_CORE + buildKbSection(KB[lang] || []);
+export function buildSystemPromptFull(lang: Lang, pageLine = ''): string {
+  return BRAIN_CORE + (pageLine ? `\n\n${pageLine}` : '') + buildKbSection(KB[lang] || []);
 }
 
 export interface BrainEnv {

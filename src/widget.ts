@@ -47,7 +47,13 @@ export const WIDGET_JS = `(function () {
       fSubmit: 'Enviar', fSending: 'Enviando...',
       fOk: '¡Listo! El equipo te contactará pronto.', fErr: 'No se pudo enviar. Inténtalo de nuevo.',
       fReqName: 'Escribe tu nombre', fReqEmail: 'Escribe un email válido',
-      errGeneric: 'No pude conectarme. Inténtalo de nuevo.', errNetwork: 'Error de red.', errNoReply: 'No recibí respuesta.'
+      errGeneric: 'No pude conectarme. Inténtalo de nuevo.', errNetwork: 'Error de red.', errNoReply: 'No recibí respuesta.',
+      newChat: 'Nueva conversación',
+      suggGen: ['¿Qué productos tiene Yammbo?', '¿Cuánto cuesta?', 'Quiero hablar con una persona'],
+      suggWhat: '¿Qué es {X}?', suggStart: '¿Cómo empiezo con {X}?', suggPrice: '¿Cuánto cuesta {X}?',
+      reachDirect: '¿Prefieres escribir directo?', ctWhatsApp: 'WhatsApp', ctEmail: 'Email',
+      privacy: 'Guardamos las conversaciones 90 días para mejorar las respuestas.', privacyLink: 'Privacidad',
+      fbUp: 'Respuesta útil', fbDown: 'Respuesta no útil'
     },
     en: {
       title: 'Yammbo', open: 'Open chat', close: 'Close', back: 'Back', send: 'Send',
@@ -69,7 +75,13 @@ export const WIDGET_JS = `(function () {
       fSubmit: 'Send', fSending: 'Sending...',
       fOk: 'Done! The team will contact you soon.', fErr: 'Could not send. Try again.',
       fReqName: 'Enter your name', fReqEmail: 'Enter a valid email',
-      errGeneric: 'I could not connect. Try again.', errNetwork: 'Network error.', errNoReply: 'No response received.'
+      errGeneric: 'I could not connect. Try again.', errNetwork: 'Network error.', errNoReply: 'No response received.',
+      newChat: 'New conversation',
+      suggGen: ['What products does Yammbo have?', 'How much does it cost?', 'I want to talk to a person'],
+      suggWhat: 'What is {X}?', suggStart: 'How do I get started with {X}?', suggPrice: 'How much does {X} cost?',
+      reachDirect: 'Prefer to reach us directly?', ctWhatsApp: 'WhatsApp', ctEmail: 'Email',
+      privacy: 'We keep conversations for 90 days to improve answers.', privacyLink: 'Privacy',
+      fbUp: 'Helpful answer', fbDown: 'Not helpful'
     }
   };
   var lang = detectLang();
@@ -165,6 +177,19 @@ export const WIDGET_JS = `(function () {
   function loadHistory() { try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); } catch (_) { return []; } }
   function saveHistory(h) { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(h.slice(-MAX_HISTORY))); } catch (_) {} }
   function friendlyErr(raw) { if (!raw) return t.errGeneric; try { var j = JSON.parse(raw); if (j && j.error) return j.error; } catch (_) {} return raw.length > 200 ? t.errGeneric : raw; }
+  // Product of the page the widget is on (same mapping as the server, simplified).
+  var PAGE_HOST = { 'pos.yammbo.com': 'pos', 'store.yammbo.com': 'store', 'web.yammbo.com': 'web', 'bot.yammbo.com': 'yammbot', 'music.yammbo.com': 'music', 'tv.yammbo.com': 'tv', 'food.yammbo.com': 'food' };
+  var PAGE_PATH = { web: 'web', store: 'store', pos: 'pos', music: 'music', tv: 'tv', food: 'food', bot: 'yammbot', yammbot: 'yammbot' };
+  var PAGE_NAME = { pos: 'Yammbo POS', store: 'Yammbo Store', web: 'Yammbo Web', yammbot: 'Yammbot', music: 'Yammbo Music', tv: 'Yammbo TV', food: 'Yammbo Food' };
+  function pageProduct() {
+    var host = String(location.hostname || '').toLowerCase();
+    var segs = String(location.pathname || '').toLowerCase().split('/').filter(Boolean);
+    if (own(PAGE_HOST, host)) return PAGE_HOST[host];
+    if (host === 'yammbo.com' || host === 'www.yammbo.com') return own(PAGE_PATH, segs[0] || '') ? PAGE_PATH[segs[0]] : null;
+    if (host === 'help.yammbo.com' && segs[0] === 'docs') return own(PAGE_PATH, segs[2] || '') ? PAGE_PATH[segs[2]] : null;
+    return null;
+  }
+  function pageInfo() { return { url: location.origin + location.pathname, title: String(document.title || '').slice(0, 120) }; }
   async function getJSON(path) { var r = await fetch(BASE + path, { headers: { 'accept': 'application/json' } }); if (!r.ok) throw new Error('http ' + r.status); return r.json(); }
 
   // Styles ---------------------------------------------------------------
@@ -188,6 +213,7 @@ export const WIDGET_JS = `(function () {
     '.yc-head h3{margin:0;font-size:15px;font-weight:600;line-height:1.2;color:var(--yc-fg);flex:1}',
     '.yc-head p{margin:2px 0 0;font-size:12px;color:var(--yc-muted)}',
     '.yc-iconbtn{background:transparent;border:none;cursor:pointer;color:var(--yc-muted);padding:5px;border-radius:8px;display:flex;align-items:center}.yc-iconbtn:hover{background:var(--yc-hover);color:var(--yc-fg)}',
+    '.yc-iconbtn[hidden]{display:none}',
     '.yc-lang{display:flex;gap:2px;align-items:center;border:1px solid var(--yc-line);border-radius:8px;padding:2px}',
     '.yc-lang button{background:transparent;border:none;cursor:pointer;font-size:11px;font-weight:600;color:var(--yc-muted);padding:3px 7px;border-radius:6px;letter-spacing:.03em}',
     '.yc-lang button.yc-langon{color:var(--yc-fg);background:var(--yc-soft2)}',
@@ -250,6 +276,15 @@ export const WIDGET_JS = `(function () {
     '.yc-handoff{align-self:flex-start;margin-top:2px}',
     '.yc-handoff button,.yc-submit{background:var(--yc-accent);color:var(--yc-accent-fg);border:none;border-radius:12px;padding:9px 14px;font-size:13px;font-weight:600;cursor:pointer;transition:background-color .12s}',
     '.yc-handoff button:hover,.yc-submit:hover:not(:disabled){background:var(--yc-accent-hover)}',
+    '.yc-sugg{display:flex;flex-direction:column;gap:8px;align-items:flex-start;margin-top:4px}',
+    '.yc-chip{background:var(--yc-bg);border:1px solid var(--yc-line);border-radius:999px;padding:8px 13px;font-size:13px;line-height:1.3;color:var(--yc-fg);cursor:pointer;text-align:left;transition:background-color .12s,border-color .12s}',
+    '.yc-chip:hover{background:var(--yc-hover);border-color:var(--yc-line-strong)}',
+    '.yc-fb{align-self:flex-start;display:flex;gap:2px;margin:-6px 0 0 4px}',
+    '.yc-fb button{background:transparent;border:none;cursor:pointer;color:var(--yc-muted);padding:4px;border-radius:6px;display:flex}.yc-fb button:hover{background:var(--yc-hover);color:var(--yc-fg)}.yc-fb button[aria-pressed="true"]{color:var(--yc-accent-text)}',
+    '.yc-direct{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px}.yc-direct>span{flex-basis:100%;font-size:12px;color:var(--yc-muted)}',
+    '.yc-ghost{display:inline-flex;align-items:center;gap:6px;background:transparent;color:var(--yc-fg);border:1px solid var(--yc-line-strong);border-radius:12px;padding:8px 12px;font-size:13px;font-weight:600;text-decoration:none;cursor:pointer;transition:background-color .12s}.yc-ghost:hover{background:var(--yc-hover)}',
+    '.yc-privacy{flex-shrink:0;padding:0 14px 8px;font-size:11px;line-height:1.35;color:var(--yc-muted);text-align:center;background:var(--yc-bg)}.yc-privacy a{color:var(--yc-muted);text-decoration:underline}',
+    '.yc-hp{position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden}',
     '.yc-foot{padding:10px;border-top:1px solid var(--yc-line);display:flex;gap:8px;align-items:flex-end;background:var(--yc-bg);flex-shrink:0}',
     '.yc-input{flex:1;resize:none;background:var(--yc-soft);border:1px solid var(--yc-line);border-radius:12px;padding:9px 11px;font-size:14px;line-height:1.4;max-height:120px;color:var(--yc-fg)}',
     '.yc-send{background:var(--yc-accent);color:var(--yc-accent-fg);border:none;border-radius:12px;width:38px;height:38px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background-color .12s}.yc-send:hover:not(:disabled){background:var(--yc-accent-hover)}.yc-send:disabled{background:var(--yc-soft2);color:var(--yc-muted);cursor:not-allowed}',
@@ -334,6 +369,11 @@ export const WIDGET_JS = `(function () {
     close: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>',
     back: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>',
     sendIcon: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>',
+    newchat: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>',
+    thumbUp: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>',
+    thumbDown: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"/></svg>',
+    wa: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>',
+    mail: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><path d="M22 6l-10 7L2 6"/></svg>',
     chev: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>'
   };
 
@@ -347,6 +387,8 @@ export const WIDGET_JS = `(function () {
   var chatLog = loadHistory();
   var busy = false;
   var docsCache = null;
+  var newChatBtn = null; // header button, only visible when the chat has messages
+  var chatInput = null;
   // Navigation stack — drives both rendering and the device back button.
   // Bottom of the stack is always 'home'. Each forward navigation pushes a
   // browser history entry so the hardware/browser Back button unwinds the
@@ -369,6 +411,13 @@ export const WIDGET_JS = `(function () {
     }
     var titleEl = el('<div style="flex:1"><h3 style="margin:0">' + esc(title) + '</h3>' + (opts.sub ? '<p>' + esc(opts.sub) + '</p>' : '') + '</div>');
     h.appendChild(titleEl);
+    newChatBtn = null;
+    if (opts.newChat) {
+      newChatBtn = el('<button class="yc-iconbtn" aria-label="' + t.newChat + '" title="' + t.newChat + '">' + IC.newchat + '</button>');
+      newChatBtn.hidden = !chatLog.length;
+      newChatBtn.addEventListener('click', newConversation);
+      h.appendChild(newChatBtn);
+    }
     var langTog = el('<div class="yc-lang"></div>');
     ['es', 'en'].forEach(function (L) {
       var lb = el('<button class="' + (lang === L ? 'yc-langon' : '') + '" aria-label="' + L + '">' + L.toUpperCase() + '</button>');
@@ -539,15 +588,17 @@ export const WIDGET_JS = `(function () {
   // Chat -----------------------------------------------------------------
   var chatBody = null;
   function renderChat() {
-    panel.appendChild(header(t.secChat, { back: true, sub: t.secChatSub }));
+    panel.appendChild(header(t.secChat, { back: true, sub: t.secChatSub, newChat: true }));
     var wrap = el('<div class="yc-view yc-chatview"></div>');
     chatBody = el('<div class="yc-body" aria-live="polite"></div>');
     wrap.appendChild(chatBody);
     var foot = el('<div class="yc-foot"></div>');
-    var input = el('<textarea class="yc-input" rows="1" placeholder="' + t.chatPlaceholder + '"></textarea>');
+    var input = el('<textarea class="yc-input" rows="1" maxlength="2000" placeholder="' + t.chatPlaceholder + '"></textarea>');
+    chatInput = input;
     var sendB = el('<button class="yc-send" aria-label="' + t.send + '">' + IC.sendIcon + '</button>');
     foot.appendChild(input); foot.appendChild(sendB);
     wrap.appendChild(foot);
+    wrap.appendChild(el('<div class="yc-privacy">' + esc(t.privacy) + ' <a href="https://chat.yammbo.com/privacy#' + lang + '" target="_blank" rel="noopener">' + esc(t.privacyLink) + '</a></div>'));
     panel.appendChild(wrap); panel.appendChild(bottomNav('chat'));
 
     input.addEventListener('input', function () { input.style.height = 'auto'; input.style.height = Math.min(120, input.scrollHeight) + 'px'; });
@@ -559,9 +610,63 @@ export const WIDGET_JS = `(function () {
   }
   function paintChat() {
     chatBody.innerHTML = '';
-    if (!chatLog.length) { chatBody.appendChild(el('<div class="yc-muted">' + t.chatEmpty + '</div>')); return; }
-    chatLog.forEach(function (m) { addMsg(m.role, m.content, false); });
+    if (newChatBtn) newChatBtn.hidden = !chatLog.length;
+    if (!chatLog.length) {
+      chatBody.appendChild(el('<div class="yc-muted">' + t.chatEmpty + '</div>'));
+      var sg = el('<div class="yc-sugg"></div>');
+      suggestions().forEach(function (q) {
+        var c = el('<button class="yc-chip">' + esc(q) + '</button>');
+        c.addEventListener('click', function () { if (chatInput) doSend(chatInput, q); });
+        sg.appendChild(c);
+      });
+      chatBody.appendChild(sg);
+      return;
+    }
+    chatLog.forEach(function (m) { addMsg(m.role, m.content, false); if (m.role === 'assistant' && m.id) addThumbs(m); });
     chatBody.scrollTop = chatBody.scrollHeight;
+  }
+  // Empty-chat chips: product-specific when the page maps to a product.
+  function suggestions() {
+    var p = pageProduct();
+    if (!p) return t.suggGen;
+    var X = PAGE_NAME[p];
+    return [t.suggWhat, t.suggStart, t.suggPrice].map(function (s) { return s.replace('{X}', X); });
+  }
+  // Wipes the conversation: history, stored session id (a new one is minted) and view.
+  function newConversation() {
+    if (busy) return;
+    chatLog = [];
+    try { localStorage.removeItem(STORAGE_KEY); localStorage.setItem(SESSION_KEY, uuid()); } catch (_) {}
+    paintChat();
+    if (chatInput) chatInput.focus();
+  }
+  // Thumbs under an assistant answer. m is the chatLog entry (m.id, m.rating).
+  function addThumbs(m) {
+    var row = el('<div class="yc-fb"></div>');
+    var up = el('<button aria-label="' + t.fbUp + '" title="' + t.fbUp + '">' + IC.thumbUp + '</button>');
+    var down = el('<button aria-label="' + t.fbDown + '" title="' + t.fbDown + '">' + IC.thumbDown + '</button>');
+    function sync() { up.setAttribute('aria-pressed', m.rating === 1 ? 'true' : 'false'); down.setAttribute('aria-pressed', m.rating === -1 ? 'true' : 'false'); }
+    function vote(r) {
+      if (m.rating === r) return;
+      m.rating = r; saveHistory(chatLog); sync();
+      try {
+        fetch(BASE + '/api/feedback', { method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ sessionId: sessionId(), messageId: m.id, rating: r }) }).catch(function () {});
+      } catch (_) {}
+    }
+    up.addEventListener('click', function () { vote(1); });
+    down.addEventListener('click', function () { vote(-1); });
+    sync();
+    row.appendChild(up); row.appendChild(down);
+    chatBody.appendChild(row); chatBody.scrollTop = chatBody.scrollHeight;
+    return row;
+  }
+  // "Prefer to reach us directly?" row: WhatsApp + email, secondary buttons.
+  function contactRow() {
+    var r = el('<div class="yc-direct"><span>' + esc(t.reachDirect) + '</span></div>');
+    r.appendChild(el('<a class="yc-ghost" href="https://wa.me/15623464876" target="_blank" rel="noopener">' + IC.wa + esc(t.ctWhatsApp) + '</a>'));
+    r.appendChild(el('<a class="yc-ghost" href="mailto:support@yammbo.com">' + IC.mail + esc(t.ctEmail) + '</a>'));
+    return r;
   }
   function addMsg(role, content, persist) {
     var e = document.createElement('div');
@@ -579,22 +684,25 @@ export const WIDGET_JS = `(function () {
   function addHandoffButton() {
     var w = el('<div class="yc-handoff"><button>' + t.talkHuman + '</button></div>');
     w.querySelector('button').addEventListener('click', function () { go('form'); });
+    w.appendChild(contactRow());
     chatBody.appendChild(w); chatBody.scrollTop = chatBody.scrollHeight;
   }
   function showTyping() { var x = el('<div class="yc-typing"><span></span><span></span><span></span></div>'); chatBody.appendChild(x); chatBody.scrollTop = chatBody.scrollHeight; return x; }
 
-  async function doSend(input) {
+  async function doSend(input, preset) {
     if (busy) return;
-    var text = input.value.trim(); if (!text) return;
+    var text = (preset || input.value).trim().slice(0, 2000); if (!text) return;
     busy = true;
     input.value = ''; input.style.height = 'auto';
     if (!chatLog.length) chatBody.innerHTML = '';
     addMsg('user', text, true);
+    if (newChatBtn) newChatBtn.hidden = false;
     var typing = showTyping();
     var msgEl = null, buf = '';
     try {
       var res = await fetch(API, { method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sessionId: sessionId(), messages: chatLog.map(function (m) { return { role: m.role, content: m.content }; }) }) });
+        body: JSON.stringify({ sessionId: sessionId(), lang: lang, page: pageInfo(),
+          messages: chatLog.slice(-12).map(function (m) { return { role: m.role, content: m.content.slice(0, 2000) }; }) }) });
       if (!res.ok || !res.body) { var et = await res.text(); typing.remove(); addNote(friendlyErr(et), true); busy = false; return; }
       var reader = res.body.getReader(), dec = new TextDecoder(), sse = '';
       while (true) {
@@ -611,8 +719,11 @@ export const WIDGET_JS = `(function () {
       var hadHandoff = /\\[\\[HANDOFF\\]\\]/.test(buf);
       var clean = stripHandoff(buf);
       if (msgEl) msgEl.innerHTML = md(clean);
-      if (clean) { chatLog.push({ role: 'assistant', content: clean }); saveHistory(chatLog); }
+      var msgId = res.headers.get('x-chat-msg-id');
+      var entry = null;
+      if (clean) { entry = { role: 'assistant', content: clean }; if (msgId) entry.id = msgId; chatLog.push(entry); saveHistory(chatLog); }
       if (!msgEl) { typing.remove(); addNote(t.errNoReply, true); }
+      if (entry && entry.id) addThumbs(entry);
       if (hadHandoff) addHandoffButton();
     } catch (e) { typing.remove(); addNote(t.errNetwork, true); }
     finally { busy = false; input.focus(); }
@@ -631,8 +742,11 @@ export const WIDGET_JS = `(function () {
     var fChan = el('<div class="yc-field"><label>' + esc(t.fChannel) + '</label><select><option value="WhatsApp">' + esc(t.chWhatsApp) + '</option><option value="Email">' + esc(t.chEmail) + '</option><option value="Llamada">' + esc(t.chCall) + '</option></select></div>');
     var fMsg = el('<div class="yc-field"><label>' + esc(t.fMessage) + '</label><textarea></textarea></div>');
     var submit = el('<button class="yc-submit">' + t.fSubmit + '</button>');
-    [fName, fEmail, fPhone, fChan, fMsg].forEach(function (x) { f.appendChild(x); });
+    // Honeypot: off-screen, not focusable, ignored by assistive tech. Bots fill it.
+    var hp = el('<div class="yc-hp" aria-hidden="true"><input type="text" name="website" tabindex="-1" autocomplete="off"></div>');
+    [fName, fEmail, fPhone, fChan, fMsg, hp].forEach(function (x) { f.appendChild(x); });
     f.appendChild(submit);
+    f.appendChild(contactRow());
     wrap.appendChild(f); panel.appendChild(wrap); panel.appendChild(bottomNav('chat'));
 
     submit.addEventListener('click', async function () {
@@ -648,10 +762,11 @@ export const WIDGET_JS = `(function () {
         var res = await fetch(BASE + '/api/lead', { method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ name: name, email: email, phone: fPhone.querySelector('input').value.trim(),
             channel: fChan.querySelector('select').value, message: fMsg.querySelector('textarea').value.trim(),
-            transcript: chatLog.slice(-8), lang: lang }) });
+            transcript: chatLog.slice(-8).map(function (m) { return { role: m.role, content: m.content }; }), lang: lang,
+            sessionId: sessionId(), page: pageInfo(), website: hp.querySelector('input').value }) });
         var j = await res.json().catch(function () { return {}; });
         clear(); panel.appendChild(header(t.formTitle, { back: true }));
-        var w2 = el('<div class="yc-view"><div class="yc-result">' + (res.ok && j.ok ? '<span class="yc-note">' + esc(t.fOk) + '</span>' : '<span class="yc-note yc-bad">' + esc(t.fErr) + '</span>') + '</div></div>');
+        var w2 = el('<div class="yc-view"><div class="yc-result">' + (res.ok && j.ok ? '<span class="yc-note">' + esc(t.fOk) + '</span>' : '<span class="yc-note yc-bad">' + esc(res.status === 429 && j.error ? j.error : t.fErr) + '</span>') + '</div></div>');
         panel.appendChild(w2); panel.appendChild(bottomNav('chat'));
       } catch (e) {
         submit.disabled = false; submit.textContent = t.fSubmit;
