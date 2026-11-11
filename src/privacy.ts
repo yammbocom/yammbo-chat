@@ -1,10 +1,11 @@
 // privacy.ts
 // GET /privacy — what the chat widget stores and for how long. Every claim
 // here mirrors code: store.ts (what is written), index.ts scheduled purge
-// (90 days conversations/feedback/page views, 365 days leads), ipHash (secret salt, per day), device.ts
+// (90 days conversations/feedback/page views/notes/tags, 365 days leads), ipHash (secret salt, per day), device.ts
 // (country/city/device/OS/browser), POST /api/visit (only after the chat was used), notify.ts and
 // announce.ts (Telegram/WhatsApp alerts; the email channel is inactive without ZEPTOMAIL_API_TOKEN —
-// if that token is ever set, this page must mention email, see the note in notify.ts).
+// if that token is ever set, this page must mention email, see the note in notify.ts),
+// inbox.ts / panel-inbox.ts (live replies by the team, internal notes and tags, the 1-5 rating).
 
 const CSS = `
 :root{color-scheme:light dark;--bg:#fff;--fg:#000;--muted:#525252;--line:#e5e5e5;--accent:#1160d8}
@@ -32,15 +33,17 @@ const ES = `
 <li><strong>Datos aproximados de tu visita</strong>: el país y la ciudad aproximados (los calcula Cloudflare a partir de tu conexión), el tipo de dispositivo (móvil, tableta o escritorio), el sistema (por ejemplo iOS o Windows) y el navegador (por ejemplo Chrome o Safari). No guardamos el identificador completo de tu navegador.</li>
 <li><strong>Las páginas que visitas después de usar el chat</strong>: la dirección (sin parámetros) y el título de las páginas de Yammbo que abres después de haber escrito en el chat, para que el equipo entienda qué buscabas. No se registra nada de lo que visitas antes de escribir ni de quien no ha usado el chat.</li>
 <li><strong>Si pides hablar con una persona</strong>: el nombre, email, teléfono, canal preferido y mensaje que escribas en el formulario, junto con la página y la conversación de la que sale.</li>
+<li><strong>Si el equipo atiende tu conversación</strong>: el equipo puede leer tus mensajes y responderte desde su panel interno, y verás sus respuestas en el chat. También guarda notas y etiquetas internas sobre la conversación (por ejemplo «cliente de POS»); tú no las ves. Si el equipo ha participado y da la conversación por resuelta, puedes valorarla con de 1 a 5 estrellas y un comentario opcional, y guardamos esa valoración y ese comentario.</li>
 <li><strong>Tu IP no se guarda en la base de datos del chat.</strong> Como mucho guardamos una huella (hash con una clave secreta) que cambia cada día, para contar visitantes distintos sin poder seguirte de un día a otro. La IP se usa en el momento para limitar el envío de mensajes en masa, y los registros técnicos de Cloudflare pueden contenerla unos días.</li>
 </ul>
 <h2>Para qué</h2>
 <p>Para responderte, para que el equipo pueda contactarte si lo pediste, para ver qué preguntas no sabe responder el asistente y mejorar la ayuda, y para saber desde dónde y con qué dispositivo nos escriben. No usamos el chat para publicidad ni vendemos estos datos.</p>
 <h2>Quién procesa los mensajes</h2>
-<p>Las respuestas las genera un modelo de lenguaje de Groq y, si falla, de Google (Gemini); a ellos se envía la conversación para contestar. Cloudflare procesa tu pregunta para buscar en el centro de ayuda y guarda los datos. Si pides contacto, tus datos del formulario y la página se envían al equipo por Telegram y WhatsApp (el resumen de los últimos mensajes, solo por Telegram), y tu nombre y canal preferido por notificación push al panel interno del equipo. Además, cada conversación nueva se avisa al equipo por Telegram con tu primera pregunta, el producto, el país, la ciudad, el dispositivo, el sistema y el navegador, y por notificación push al panel interno del equipo con el producto, la ciudad (con la bandera de su país) y la pregunta.</p>
+<p>Las respuestas las genera un modelo de lenguaje de Groq y, si falla, de Google (Gemini); a ellos se envía la conversación para contestar. Cloudflare procesa tu pregunta para buscar en el centro de ayuda y guarda los datos. Si pides contacto, tus datos del formulario y la página se envían al equipo por Telegram y WhatsApp (el resumen de los últimos mensajes, solo por Telegram), y tu nombre y canal preferido por notificación push al panel interno del equipo. Además, cada conversación nueva se avisa al equipo por Telegram con tu primera pregunta, el producto, el país, la ciudad, el dispositivo, el sistema y el navegador, y por notificación push al panel interno del equipo con el producto, la ciudad (con la bandera de su país) y la pregunta. Si pides hablar con una persona, se avisa por Telegram (con tu ubicación aproximada y tu última pregunta) y por notificación push; y mientras el equipo atiende tu conversación, cada mensaje que escribes se avisa al equipo por Telegram y por notificación push con tu ciudad (o tu país) y el texto del mensaje.</p>
 <h2>Cuánto tiempo</h2>
 <ul>
-<li>Conversaciones, valoraciones, datos aproximados de la visita y páginas visitadas después del chat: se borran solas a los <strong>90 días</strong>.</li>
+<li>Conversaciones, valoraciones (los pulgares y las estrellas con su comentario), datos aproximados de la visita y páginas visitadas después del chat: se borran solas a los <strong>90 días</strong>.</li>
+<li>Notas y etiquetas internas: se borran junto con su conversación, a los <strong>90 días</strong>.</li>
 <li>Datos de contacto del formulario: <strong>365 días</strong>.</li>
 </ul>
 <p>Estos plazos aplican a lo que guardamos en Cloudflare. Los avisos que recibe el equipo por Telegram, WhatsApp o notificación push se quedan en esas aplicaciones; pide que los borren escribiendo a support@yammbo.com.</p>
@@ -60,15 +63,17 @@ const EN = `
 <li><strong>Approximate details of your visit</strong>: your approximate country and city (worked out by Cloudflare from your connection), the device type (mobile, tablet or desktop), the system (for example iOS or Windows) and the browser (for example Chrome or Safari). We do not keep your browser's full identifier.</li>
 <li><strong>The pages you visit after using the chat</strong>: the address (without parameters) and the title of the Yammbo pages you open after you have written in the chat, so the team understands what you were looking for. Nothing is recorded about what you visit before writing, or about people who have not used the chat.</li>
 <li><strong>If you ask to talk to a person</strong>: the name, email, phone, preferred channel and message you enter in the form, plus the page and the conversation it came from.</li>
+<li><strong>If the team handles your conversation</strong>: the team can read your messages and reply from its internal panel, and you will see its replies in the chat. It also keeps internal notes and tags about the conversation (for example "POS customer"); you do not see them. If the team took part and marks the conversation as resolved, you can rate it from 1 to 5 stars with an optional comment, and we keep that rating and comment.</li>
 <li><strong>Your IP address is not stored in the chat database.</strong> At most we keep a fingerprint (a hash with a secret key) that changes every day, to count distinct visitors without following you from one day to the next. The IP is used at that moment to limit bulk messaging, and Cloudflare's technical logs may hold it for a few days.</li>
 </ul>
 <h2>Why</h2>
 <p>To answer you, to let the team contact you if you asked, to see which questions the assistant cannot answer so we can improve the help center, and to know where and on what device people write to us. We don't use the chat for advertising and we don't sell this data.</p>
 <h2>Who processes messages</h2>
-<p>Replies are generated by a language model from Groq and, if that fails, from Google (Gemini); they receive the conversation in order to answer. Cloudflare processes your question to search the help center and stores the data. If you ask for contact, your form details and the page are sent to the team by Telegram and WhatsApp (the summary of the last messages, by Telegram only), and your name and preferred channel by push notification to the team's internal panel. In addition, every new conversation is announced to the team on Telegram with your first question, the product, the country, the city, the device, the system and the browser, and by push notification to the team's internal panel with the product, the city (with its country's flag) and the question.</p>
+<p>Replies are generated by a language model from Groq and, if that fails, from Google (Gemini); they receive the conversation in order to answer. Cloudflare processes your question to search the help center and stores the data. If you ask for contact, your form details and the page are sent to the team by Telegram and WhatsApp (the summary of the last messages, by Telegram only), and your name and preferred channel by push notification to the team's internal panel. In addition, every new conversation is announced to the team on Telegram with your first question, the product, the country, the city, the device, the system and the browser, and by push notification to the team's internal panel with the product, the city (with its country's flag) and the question. If you ask to talk to a person, the team is alerted on Telegram (with your approximate location and your last question) and by push notification; and while the team handles your conversation, every message you write is announced to the team on Telegram and by push notification with your city (or country) and the text of the message.</p>
 <h2>How long</h2>
 <ul>
-<li>Conversations, ratings, approximate visit details and pages visited after the chat: deleted automatically after <strong>90 days</strong>.</li>
+<li>Conversations, ratings (the thumbs, and the stars with their comment), approximate visit details and pages visited after the chat: deleted automatically after <strong>90 days</strong>.</li>
+<li>Internal notes and tags: deleted together with their conversation, after <strong>90 days</strong>.</li>
 <li>Contact details from the form: <strong>365 days</strong>.</li>
 </ul>
 <p>These periods apply to what we keep on Cloudflare. The alerts the team receives by Telegram, WhatsApp or push notification stay in those apps; ask support@yammbo.com to have them deleted.</p>

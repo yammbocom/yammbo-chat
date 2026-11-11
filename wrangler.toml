@@ -40,8 +40,8 @@ binding = "AI"
 binding = "KB_INDEX"
 index_name = "yammbo-kb"
 
-# D1 — chat transcripts, leads, feedback, panel page views and push subscriptions
-# (retention handled in scheduled()). Schema: migrations/0001_init.sql, 0002_panel.sql
+# D1 — chat transcripts, leads, feedback, panel page views, push subscriptions, inbox (notes, tags, canned replies)
+# (retention handled in scheduled()). Schema: migrations/0001_init.sql, 0002_panel.sql, 0003_inbox.sql
 [[d1_databases]]
 binding = "DB"
 database_name = "yammbo-chat"

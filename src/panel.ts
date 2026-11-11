@@ -11,22 +11,30 @@
 //   POST /panel/api/logout
 //   GET  /panel/api/stats | conversations | conversations/:id | leads | unanswered
 //   GET  /panel/api/push/key       POST /panel/api/push/subscribe | unsubscribe
+//   Shared inbox (see panel-inbox.ts):
+//   POST /panel/api/conversations/:id/reply | mode | status | draft
+//   POST|DELETE /panel/api/conversations/:id/tags[/:tag]   GET|POST|DELETE .../notes[/:noteId]
+//   GET /panel/api/tags   GET|POST /panel/api/canned   POST|DELETE /panel/api/canned/:id
 //
 // Every query uses bound parameters. Every /panel/api route except login needs a
-// valid session (401) and every POST needs the x-requested-with: panel header
+// valid session (401) and every POST/DELETE needs the x-requested-with: panel header
 // (anti-CSRF on top of SameSite=Strict). There is no CORS here on purpose.
 
 import { escapeHtml, sendTelegram, type NotifyEnv } from './notify';
 import { PRODUCT_NAMES } from './page';
+import { isStrongId } from './inbox';
 import { isValidId, type StoreEnv } from './store';
 import { hit, isRateLimited } from './limit';
 import { b64urlDecode, b64urlEncode, getVapidKeys, type PushEnv } from './push';
 import { PANEL_CSS, PANEL_HTML, PANEL_ICON_SVG, PANEL_MANIFEST, PANEL_SW_JS } from './panel-ui';
 import { PANEL_APP_JS } from './panel-app';
+import type { BrainEnv } from './brain';
+import type { RagEnv } from './rag';
+import * as inbox from './panel-inbox';
 import icon192 from './panel-icons/icon-192.png';
 import icon512 from './panel-icons/icon-512.png';
 
-export interface PanelEnv extends NotifyEnv, StoreEnv, PushEnv {
+export interface PanelEnv extends NotifyEnv, StoreEnv, PushEnv, BrainEnv, RagEnv {
   CHAT_LIMITER?: RateLimit;
   // Local development only (.dev.vars, never in wrangler.toml): a fixed login
   // code so the flow can be tested without Telegram. Ignored unless the request
@@ -308,7 +316,7 @@ async function stats(env: PanelEnv, url: URL): Promise<Response> {
 
   const res = await db.batch([
     db.prepare('SELECT COUNT(*) AS n FROM conversations WHERE created_at >= ?').bind(since), // 0
-    db.prepare('SELECT COUNT(*) AS n FROM messages WHERE created_at >= ?').bind(since), // 1
+    db.prepare("SELECT COUNT(*) AS n FROM messages WHERE role != 'system' AND created_at >= ?").bind(since), // 1
     db.prepare('SELECT COUNT(*) AS n FROM leads WHERE created_at >= ?').bind(since), // 2
     db.prepare('SELECT COALESCE(SUM(rating = 1), 0) AS up, COALESCE(SUM(rating = -1), 0) AS down FROM feedback WHERE created_at >= ?').bind(since), // 3
     db.prepare("SELECT COUNT(*) AS n FROM messages WHERE role = 'assistant' AND handoff = 1 AND created_at >= ?").bind(since), // 4
@@ -324,6 +332,8 @@ async function stats(env: PanelEnv, url: URL): Promise<Response> {
     db
       .prepare("SELECT CAST(strftime('%H', (created_at + ?) / 1000, 'unixepoch') AS INTEGER) AS hour, COUNT(*) AS n FROM conversations WHERE created_at >= ? GROUP BY hour")
       .bind(tzMs, since), // 10
+    db.prepare('SELECT COUNT(csat) AS n, AVG(csat) AS avg FROM conversations WHERE csat_at >= ?').bind(since), // 11
+    db.prepare("SELECT COUNT(*) AS n FROM conversations WHERE mode = 'waiting'"), // 12
   ]);
   const rows = <T>(i: number) => (res[i].results ?? []) as T[];
 
@@ -336,6 +346,7 @@ async function stats(env: PanelEnv, url: URL): Promise<Response> {
   const hours = new Array<number>(24).fill(0);
   for (const r of rows<{ hour: number; n: number }>(10)) if (r.hour >= 0 && r.hour < 24) hours[r.hour] = r.n;
   const fb = rows<{ up: number; down: number }>(3)[0] ?? { up: 0, down: 0 };
+  const cs = rows<{ n: number; avg: number | null }>(11)[0] ?? { n: 0, avg: null };
 
   return jsonResponse({
     days,
@@ -346,7 +357,10 @@ async function stats(env: PanelEnv, url: URL): Promise<Response> {
       thumbsUp: fb.up,
       thumbsDown: fb.down,
       handoffs: rows<CountRow>(4)[0]?.n ?? 0,
+      csatCount: cs.n,
+      csatAvg: cs.avg === null ? null : Math.round(cs.avg * 10) / 10,
     },
+    waiting: rows<CountRow>(12)[0]?.n ?? 0,
     series,
     products: rows<KeyCount>(6),
     countries: rows<KeyCount>(7),
@@ -368,28 +382,39 @@ async function listConversations(env: PanelEnv, url: URL): Promise<Response> {
   const product = Object.prototype.hasOwnProperty.call(PRODUCT_NAMES, productParam) ? productParam : null;
   const countryParam = (url.searchParams.get('country') || '').toUpperCase();
   const country = /^[A-Z]{2}$/.test(countryParam) ? countryParam : null;
+  const statusParam = url.searchParams.get('status') || '';
+  const status = statusParam === 'open' || statusParam === 'resolved' ? statusParam : null;
+  const modeParam = url.searchParams.get('mode') || '';
+  const mode = modeParam === 'bot' || modeParam === 'waiting' || modeParam === 'human' ? modeParam : null;
+  const tag = inbox.normalizeTag(url.searchParams.get('tag') || '');
 
   const stmts = [
     db
       .prepare(
         `SELECT c.id, c.created_at, c.updated_at, c.product, c.country, c.city, c.device, c.os, c.browser, c.lang, c.msg_count,
+                c.mode, c.status, c.unread, c.csat,
                 (SELECT m.content FROM messages m WHERE m.session_id = c.id AND m.role = 'user' ORDER BY m.created_at ASC LIMIT 1) AS first_question,
                 EXISTS (SELECT 1 FROM leads l WHERE l.session_id = c.id) AS has_lead,
                 (SELECT COUNT(*) FROM feedback f WHERE f.session_id = c.id AND f.rating = 1) AS up,
-                (SELECT COUNT(*) FROM feedback f WHERE f.session_id = c.id AND f.rating = -1) AS down
+                (SELECT COUNT(*) FROM feedback f WHERE f.session_id = c.id AND f.rating = -1) AS down,
+                (SELECT group_concat(t.tag, ',') FROM conversation_tags t WHERE t.session_id = c.id) AS tags
          FROM conversations c
          WHERE (?1 IS NULL OR c.updated_at < ?1)
            AND (?2 IS NULL OR c.product = ?2)
            AND (?3 IS NULL OR c.country = ?3)
            AND (?4 IS NULL OR EXISTS (SELECT 1 FROM messages m WHERE m.session_id = c.id AND m.content LIKE ?4 ESCAPE '\\'))
+           AND (?5 IS NULL OR c.status = ?5)
+           AND (?6 IS NULL OR c.mode = ?6)
+           AND (?7 IS NULL OR EXISTS (SELECT 1 FROM conversation_tags t WHERE t.session_id = c.id AND t.tag = ?7))
          ORDER BY c.updated_at DESC
          LIMIT ${PAGE_SIZE + 1}`,
       )
-      .bind(before, product, country, q ? likePattern(q) : null),
+      .bind(before, product, country, q ? likePattern(q) : null, status, mode, tag),
   ];
-  // Country options for the filter: only needed once, with the first page.
+  // Filter options (countries, tags in use): only needed once, with the first page.
   if (before === null) {
     stmts.push(db.prepare('SELECT country AS key, COUNT(*) AS n FROM conversations WHERE country IS NOT NULL GROUP BY country ORDER BY n DESC LIMIT 40'));
+    stmts.push(db.prepare('SELECT tag AS key, COUNT(*) AS n FROM conversation_tags GROUP BY tag ORDER BY n DESC, tag ASC LIMIT 50'));
   }
   const res = await db.batch(stmts);
   const rows = (res[0].results ?? []) as Array<Record<string, unknown>>;
@@ -407,37 +432,57 @@ async function listConversations(env: PanelEnv, url: URL): Promise<Response> {
       browser: r.browser,
       lang: r.lang,
       msgCount: r.msg_count,
+      mode: r.mode,
+      status: r.status,
+      unread: r.unread,
+      csat: r.csat ?? null,
+      tags: typeof r.tags === 'string' && r.tags ? r.tags.split(',') : [],
       firstQuestion: typeof r.first_question === 'string' ? r.first_question.slice(0, 300) : null,
       hasLead: r.has_lead === 1,
       up: r.up,
       down: r.down,
     })),
     next: rows.length > PAGE_SIZE ? page[page.length - 1].updated_at : null,
-    ...(before === null ? { countries: res[1]?.results ?? [] } : {}),
+    ...(before === null ? { countries: res[1]?.results ?? [], tags: res[2]?.results ?? [] } : {}),
   });
 }
 
-async function conversationDetail(env: PanelEnv, id: string): Promise<Response> {
+// The panel polls this every few seconds with ?after=<ms>: only the messages newer
+// than that come back (the client merges them by id); everything else is small.
+// Opening it counts as reading, so the unread counter is reset here.
+async function conversationDetail(env: PanelEnv, id: string, url: URL): Promise<Response> {
   const db = env.DB!;
   if (!isValidId(id)) return jsonResponse({ error: 'not_found' }, 404);
+  const after = Math.max(0, parseInt(url.searchParams.get('after') || '', 10) || 0);
   const res = await db.batch([
-    db.prepare('SELECT id, created_at, updated_at, page_url, product, lang, msg_count, country, city, device, os, browser FROM conversations WHERE id = ?').bind(id),
+    db
+      .prepare(
+        `SELECT id, created_at, updated_at, page_url, product, lang, msg_count, country, city, device, os, browser,
+                mode, status, unread, last_agent_at, csat_requested, csat, csat_comment, csat_at
+         FROM conversations WHERE id = ?`,
+      )
+      .bind(id),
     db
       .prepare(
         `SELECT m.id, m.role, m.content, m.created_at, m.provider, m.rag_hits, m.handoff, m.page_url, f.rating
          FROM messages m LEFT JOIN feedback f ON f.message_id = m.id
-         WHERE m.session_id = ? ORDER BY m.created_at ASC LIMIT 500`,
+         WHERE m.session_id = ?1 AND m.created_at > ?2 ORDER BY m.created_at ASC LIMIT 500`,
       )
-      .bind(id),
+      .bind(id, after),
     db.prepare('SELECT url, title, created_at FROM page_views WHERE session_id = ? ORDER BY created_at ASC LIMIT 200').bind(id),
     db
       .prepare('SELECT id, created_at, name, email, phone, channel, message, page_url FROM leads WHERE session_id = ? ORDER BY created_at DESC LIMIT 1')
       .bind(id),
+    db.prepare('SELECT COALESCE(SUM(rating = 1), 0) AS up, COALESCE(SUM(rating = -1), 0) AS down FROM feedback WHERE session_id = ?').bind(id),
+    db.prepare('SELECT tag FROM conversation_tags WHERE session_id = ? ORDER BY created_at ASC, tag ASC').bind(id),
+    db.prepare('SELECT id, body, created_at FROM notes WHERE session_id = ? ORDER BY created_at ASC LIMIT 200').bind(id),
+    db.prepare('UPDATE conversations SET unread = 0 WHERE id = ? AND unread != 0').bind(id),
   ]);
   const conv = (res[0].results ?? [])[0] as Record<string, unknown> | undefined;
   if (!conv) return jsonResponse({ error: 'not_found' }, 404);
   const messages = (res[1].results ?? []) as Array<Record<string, unknown>>;
   const lead = (res[3].results ?? [])[0] as Record<string, unknown> | undefined;
+  const votes = ((res[4].results ?? [])[0] as { up: number; down: number } | undefined) ?? { up: 0, down: 0 };
   return jsonResponse({
     conversation: {
       id: conv.id,
@@ -452,6 +497,13 @@ async function conversationDetail(env: PanelEnv, id: string): Promise<Response> 
       device: conv.device,
       os: conv.os,
       browser: conv.browser,
+      mode: conv.mode,
+      status: conv.status,
+      // Short ids cannot be answered live (the widget only polls strong ids).
+      legacy: !isStrongId(id),
+      unread: conv.unread,
+      lastAgentAt: conv.last_agent_at ?? null,
+      csat: { requested: conv.csat_requested === 1, score: conv.csat ?? null, comment: conv.csat_comment ?? null, at: conv.csat_at ?? null },
     },
     messages: messages.map((m) => ({
       id: m.id,
@@ -464,10 +516,9 @@ async function conversationDetail(env: PanelEnv, id: string): Promise<Response> 
       pageUrl: m.page_url,
       rating: m.rating ?? null,
     })),
-    votes: {
-      up: messages.filter((m) => m.rating === 1).length,
-      down: messages.filter((m) => m.rating === -1).length,
-    },
+    votes,
+    tags: ((res[5].results ?? []) as Array<{ tag: string }>).map((t) => t.tag),
+    notes: ((res[6].results ?? []) as Array<{ id: string; body: string; created_at: number }>).map((n) => ({ id: n.id, body: n.body, createdAt: n.created_at })),
     pageViews: ((res[2].results ?? []) as Array<Record<string, unknown>>).map((v) => ({ url: v.url, title: v.title, createdAt: v.created_at })),
     lead: lead
       ? { id: lead.id, createdAt: lead.created_at, name: lead.name, email: lead.email, phone: lead.phone, channel: lead.channel, message: lead.message, pageUrl: lead.page_url }
@@ -625,9 +676,19 @@ async function pushUnsubscribe(request: Request, env: PanelEnv): Promise<Respons
   return jsonResponse({ ok: true });
 }
 
+// A missing or malformed JSON body is treated as {}: each handler validates its fields.
+async function readJson(request: Request): Promise<Record<string, unknown>> {
+  try {
+    const j = await request.json();
+    return j && typeof j === 'object' && !Array.isArray(j) ? (j as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
 // Router -----------------------------------------------------------------------------------
 
-export async function handlePanel(request: Request, env: PanelEnv, url: URL): Promise<Response> {
+export async function handlePanel(request: Request, env: PanelEnv, url: URL, ctx?: ExecutionContext): Promise<Response> {
   const path = url.pathname;
   const method = request.method;
 
@@ -641,8 +702,8 @@ export async function handlePanel(request: Request, env: PanelEnv, url: URL): Pr
     });
   }
 
-  if (method !== 'GET' && method !== 'POST') return jsonResponse({ error: 'method_not_allowed' }, 405);
-  if (method === 'POST') {
+  if (method !== 'GET' && method !== 'POST' && method !== 'DELETE') return jsonResponse({ error: 'method_not_allowed' }, 405);
+  if (method === 'POST' || method === 'DELETE') {
     // Same-origin requests made by the panel itself, nothing else.
     const origin = request.headers.get('origin');
     if (request.headers.get('x-requested-with') !== 'panel' || (origin !== null && origin !== url.origin)) {
@@ -664,14 +725,53 @@ export async function handlePanel(request: Request, env: PanelEnv, url: URL): Pr
 
     if (method === 'GET' && path === '/panel/api/stats') return await stats(env, url);
     if (method === 'GET' && path === '/panel/api/conversations') return await listConversations(env, url);
-    if (method === 'GET' && path.startsWith('/panel/api/conversations/')) {
+    if (path.startsWith('/panel/api/conversations/')) {
+      // /conversations/:id[/:sub[/:arg]]
+      const parts = path.slice('/panel/api/conversations/'.length).split('/');
       let id = '';
+      let arg = '';
       try {
-        id = decodeURIComponent(path.slice('/panel/api/conversations/'.length));
+        id = decodeURIComponent(parts[0]);
+        arg = parts[2] === undefined ? '' : decodeURIComponent(parts[2]);
       } catch {
         // malformed escape: falls through to the not-found answer below
       }
-      return await conversationDetail(env, id);
+      const sub = parts[1];
+      if (!isValidId(id)) return jsonResponse({ error: 'not_found' }, 404);
+      if (method === 'GET' && sub === undefined) return await conversationDetail(env, id, url);
+      if (parts.length <= 3) {
+        const run = async (fn: () => Promise<inbox.Out>) => {
+          const out = await fn();
+          return jsonResponse(out.data, out.status);
+        };
+        const json = () => readJson(request);
+        if (method === 'POST' && parts.length === 2) {
+          if (sub === 'reply') return await run(async () => inbox.postReply(env, ctx, id, await json()));
+          if (sub === 'mode') return await run(async () => inbox.setMode(env, id, await json()));
+          if (sub === 'status') return await run(async () => inbox.setStatus(env, id, await json()));
+          if (sub === 'draft') return await run(() => inbox.makeDraft(env, id));
+          if (sub === 'tags') return await run(async () => inbox.addTag(env, id, await json()));
+          if (sub === 'notes') return await run(async () => inbox.addNote(env, id, await json()));
+        }
+        if (method === 'GET' && sub === 'notes' && parts.length === 2) return await run(() => inbox.listNotes(env, id));
+        if (method === 'DELETE' && sub === 'tags' && parts.length === 3) return await run(() => inbox.removeTag(env, id, arg));
+        if (method === 'DELETE' && sub === 'notes' && parts.length === 3) return await run(() => inbox.deleteNote(env, id, arg));
+      }
+      return jsonResponse({ error: 'not_found' }, 404);
+    }
+    if (method === 'GET' && path === '/panel/api/tags') {
+      const out = await inbox.listTagSuggestions(env);
+      return jsonResponse(out.data, out.status);
+    }
+    if (path === '/panel/api/canned' || path.startsWith('/panel/api/canned/')) {
+      const cid = path === '/panel/api/canned' ? '' : path.slice('/panel/api/canned/'.length);
+      let out: inbox.Out | null = null;
+      const bodyJson = () => readJson(request);
+      if (method === 'GET' && cid === '') out = await inbox.listCanned(env);
+      else if (method === 'POST' && cid === '') out = await inbox.saveCanned(env, null, await bodyJson());
+      else if (isValidId(cid) && method === 'POST') out = await inbox.saveCanned(env, cid, await bodyJson());
+      else if (isValidId(cid) && method === 'DELETE') out = await inbox.deleteCanned(env, cid);
+      if (out) return jsonResponse(out.data, out.status);
     }
     if (method === 'GET' && path === '/panel/api/leads') return await listLeads(env, url);
     if (method === 'GET' && path === '/panel/api/unanswered') return await listUnanswered(env, url);

@@ -55,8 +55,9 @@ export async function sendTelegram(env: NotifyEnv, text: string): Promise<SendRe
 
 // NOTE: no ZEPTOMAIL_API_TOKEN is configured today, so this channel is inactive and
 // src/privacy.ts does not mention email. If the token is ever set, update
-// privacy.ts (lead details would then also be emailed to the team).
-async function sendEmail(env: NotifyEnv, subject: string, html: string): Promise<SendResult> {
+// privacy.ts: lead details would then also be emailed to the team, and the team's
+// live replies would be emailed to visitors who left an email (sendVisitorEmail).
+async function sendEmail(env: NotifyEnv, subject: string, html: string, to?: string): Promise<SendResult> {
   if (!env.ZEPTOMAIL_API_TOKEN) return { ok: false, info: 'zeptomail_api_token_missing' };
   const res = await fetch('https://api.zeptomail.com/v1.1/email', {
     method: 'POST',
@@ -67,7 +68,7 @@ async function sendEmail(env: NotifyEnv, subject: string, html: string): Promise
     },
     body: JSON.stringify({
       from: { address: env.ZEPTOMAIL_FROM_EMAIL || 'noreply@yammbo.com', name: env.ZEPTOMAIL_FROM_NAME || 'Yammbo' },
-      to: [{ email_address: { address: env.AGENT_ALERT_EMAIL || 'frank@yammbo.com' } }],
+      to: [{ email_address: { address: to || env.AGENT_ALERT_EMAIL || 'frank@yammbo.com' } }],
       subject: subject.slice(0, 200),
       htmlbody: html,
     }),
@@ -75,6 +76,19 @@ async function sendEmail(env: NotifyEnv, subject: string, html: string): Promise
   if (res.status >= 200 && res.status < 300) return { ok: true, info: 'sent' };
   const body = await res.text().catch(() => '');
   return { ok: false, info: `zeptomail_${res.status}: ${body.slice(0, 200)}` };
+}
+
+// Sends the team's reply to a visitor who left an email. Inactive (no-op) while
+// there is no ZEPTOMAIL_API_TOKEN. The reply text is untrusted-by-construction
+// (typed in the panel) and is escaped like every other value here.
+export async function sendVisitorEmail(env: NotifyEnv, to: string, lang: 'es' | 'en', reply: string): Promise<SendResult> {
+  if (!env.ZEPTOMAIL_API_TOKEN) return { ok: false, info: 'zeptomail_api_token_missing' };
+  const es = lang === 'es';
+  const html =
+    `<p style="margin:0 0 12px">${es ? 'El equipo de Yammbo te respondió en el chat:' : 'The Yammbo team replied to you in the chat:'}</p>` +
+    `<blockquote style="margin:0 0 16px;padding:8px 14px;border-left:3px solid #1160d8;white-space:pre-wrap">${escapeHtml(reply)}</blockquote>` +
+    `<p style="color:#666;font-size:13px">${es ? 'Puedes seguir la conversación en el chat del sitio o escribir a' : 'You can continue in the site chat or write to'} support@yammbo.com</p>`;
+  return sendEmail(env, es ? 'Respuesta del equipo de Yammbo' : 'Reply from the Yammbo team', html, to);
 }
 
 async function sendWhatsApp(env: NotifyEnv, vars: string[]): Promise<SendResult> {

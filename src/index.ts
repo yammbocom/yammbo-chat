@@ -10,6 +10,9 @@
 //   POST /api/lead        human handoff — stores the lead in D1, then notifies Yambo
 //   POST /api/feedback    thumbs up/down on an assistant message
 //   POST /api/visit       page the visitor opened after using the chat (always 204)
+//   POST /api/handoff     the visitor asks for a person: bot -> waiting, alerts the team
+//   GET  /api/messages    the team's messages + state for a session (widget polling)
+//   POST /api/csat        the visitor's 1-5 rating of a resolved conversation (once)
 //   /panel, /panel/api/*  team panel (PWA): Telegram-code login, stats, conversations, push
 //   GET  /fonts/*.woff2   Geist latin / latin-ext for the widget (CORS *)
 //   OPTIONS *             CORS preflight
@@ -28,7 +31,8 @@ import {
 import { listDocs, getDoc, getBlogPosts } from './content';
 import { retrieve, reindexKb, type RagEnv } from './rag';
 import { alertLead, type NotifyEnv } from './notify';
-import { announceNewConversation, pushNewLead } from './announce';
+import { announceHandoff, announceHumanMessage, announceNewConversation, pushNewLead } from './announce';
+import { isStrongId, listLiveMessages, requestHandoff, saveCsat, takeLiveMessage } from './inbox';
 import { cleanCity, cleanCountry, parseUserAgent } from './device';
 import { isRateLimited } from './limit';
 import { handlePanel, type PanelEnv } from './panel';
@@ -81,6 +85,10 @@ interface ChatRequestBody {
   sessionId?: string;
   page?: unknown;
   lang?: unknown;
+  // What the visitor just typed, unmerged. The widget merges neighbours of the same
+  // role in `messages` for the model, so the stored text must come from here.
+  // Absent in older cached widgets (then the last user message is used).
+  text?: unknown;
 }
 
 interface FeedbackRequestBody {
@@ -93,6 +101,17 @@ interface VisitRequestBody {
   sessionId?: unknown;
   url?: unknown;
   title?: unknown;
+}
+
+interface HandoffRequestBody {
+  sessionId?: unknown;
+  lang?: unknown;
+}
+
+interface CsatRequestBody {
+  sessionId?: unknown;
+  score?: unknown;
+  comment?: unknown;
 }
 
 interface LeadRequestBody {
@@ -147,6 +166,23 @@ const RATE_LIMIT_MSG = {
   en: 'You are sending messages too fast. Please wait a moment and try again.',
 };
 
+// Shown to a cached widget that cannot handle the live mode (see /api/chat).
+const LIVE_NOTICE = {
+  es: 'El equipo de Yammbo ya está atendiendo esta conversación; recarga la página para ver sus respuestas.',
+  en: 'The Yammbo team is already handling this conversation; reload the page to see their replies.',
+};
+
+// A same-origin GET (the /demo page on chat.yammbo.com itself) carries no Origin
+// header, so the allow-list sees an empty origin. Treat "no Origin" as same-origin or
+// a non-browser caller (the sessionId is the credential), but never when the browser
+// says the request is cross-site: cross-origin fetches always add Origin, and a
+// no-cors GET (img/script) that omits it is marked by Sec-Fetch-Site.
+function sameOriginGet(request: Request): boolean {
+  if (request.headers.get('origin')) return false;
+  const site = request.headers.get('sec-fetch-site');
+  return site === null || site === 'same-origin' || site === 'none';
+}
+
 function pageLineFor(page: PageContext | null): string {
   if (!page) return '';
   // Only the hostname: the path is visitor-controlled on SPA hosts and would
@@ -164,7 +200,7 @@ export default {
 
     // Team panel: same origin only, no CORS headers (see panel.ts).
     if (url.pathname === '/panel' || url.pathname.startsWith('/panel/')) {
-      return handlePanel(request, env, url);
+      return handlePanel(request, env, url, ctx);
     }
 
     if (request.method === 'OPTIONS') {
@@ -244,13 +280,42 @@ export default {
         return jsonResponse({ error: RATE_LIMIT_MSG[lang] }, 429, cors);
       }
 
+      // The visitor's own text: explicit field when sent (1-2000 chars), else the last
+      // user message (widgets cached from before the field existed).
+      let hasText = false;
+      let lastUser = messages[messages.length - 1].content;
+      if (body.text !== undefined) {
+        if (typeof body.text !== 'string' || body.text.length < 1 || body.text.length > 2000 || !body.text.trim()) {
+          return jsonResponse({ error: 'Invalid text' }, 400, cors);
+        }
+        hasText = true;
+        lastUser = body.text;
+      }
+
       const page = sanitizePage(body.page);
+
+      // The team is in charge of this conversation (visitor asked for a person, or an
+      // agent took over): keep the message, count it as unread, alert the team and
+      // do NOT call the LLM. The empty stream + x-chat-mode tell the widget not to
+      // show "thinking"; it then polls /api/messages for the team's answer.
+      if (env.DB && isValidId(body.sessionId)) {
+        const live = await takeLiveMessage(env, { sessionId: body.sessionId, content: lastUser.slice(0, 4000), pageUrl: page?.url ?? null });
+        if (live) {
+          ctx.waitUntil(announceHumanMessage(env, { sessionId: body.sessionId, city: live.city, country: live.country, text: lastUser }));
+          // A cached widget without the `text` field does not know the live mode and would
+          // print "no reply" for an empty stream: give it a fixed assistant line instead.
+          const frame = hasText ? '' : `data: ${JSON.stringify({ choices: [{ delta: { content: LIVE_NOTICE[lang] } }] })}\n\n`;
+          return new Response(frame + 'data: [DONE]\n\n', {
+            status: 200,
+            headers: { ...cors, 'content-type': 'text/event-stream', 'cache-control': 'no-store', 'x-chat-mode': 'human' },
+          });
+        }
+      }
 
       // RAG: retrieve only the chunks relevant to the latest question. If
       // retrieval fails (Vectorize/Workers AI hiccup) fall back to the full KB
       // so the assistant always has grounding. On a product page the product
       // name is prepended to the query so ambiguous questions hit that product.
-      const lastUser = messages[messages.length - 1].content;
       const ragQuery = page?.product ? `${PRODUCT_NAMES[page.product]} ${lastUser}` : lastUser;
       const pageLine = pageLineFor(page);
       let systemPrompt: string;
@@ -356,6 +421,83 @@ export default {
       const page = sanitizePage({ url: body.url, title: body.title });
       if (page) await saveVisit(env, body.sessionId, page.url, page.title);
       return done;
+    }
+
+    // The visitor asks to talk to a person: bot -> waiting. The alert goes out once
+    // per conversation (only the call that changes the mode alerts).
+    if (request.method === 'POST' && url.pathname === '/api/handoff') {
+      if (cors['access-control-allow-origin'] === 'null') {
+        return jsonResponse({ error: 'Origin not allowed' }, 403, cors);
+      }
+      let body: HandoffRequestBody;
+      try {
+        body = (await request.json()) as HandoffRequestBody;
+      } catch {
+        return jsonResponse({ error: 'Invalid JSON body' }, 400, cors);
+      }
+      const lang = clientLang(body.lang) ?? 'en';
+      if (await isRateLimited(env.CHAT_LIMITER, request)) {
+        return jsonResponse({ error: RATE_LIMIT_MSG[lang] }, 429, cors);
+      }
+      if (!env.DB || !isStrongId(body.sessionId)) return jsonResponse({ error: 'Invalid session' }, 400, cors);
+      try {
+        const r = await requestHandoff(env, body.sessionId);
+        if (!r.found) return jsonResponse({ error: 'Unknown conversation' }, 404, cors);
+        if (r.changed) {
+          ctx.waitUntil(announceHandoff(env, { sessionId: body.sessionId, city: r.city, country: r.country, text: r.lastQuestion }));
+        }
+        return jsonResponse({ ok: true, mode: r.mode }, 200, { ...cors, 'cache-control': 'no-store' });
+      } catch (e) {
+        console.error('handoff failed:', (e as Error)?.message);
+        return jsonResponse({ ok: false }, 502, cors);
+      }
+    }
+
+    // Widget polling: what the team wrote after `after` (ms), the conversation's
+    // mode and whether a rating is pending. The sessionId (>= 128 random bits) is
+    // the credential; unknown sessions are a plain 404.
+    if (request.method === 'GET' && url.pathname === '/api/messages') {
+      if (cors['access-control-allow-origin'] === 'null' && !sameOriginGet(request)) {
+        return jsonResponse({ error: 'Origin not allowed' }, 403, cors);
+      }
+      const sid = url.searchParams.get('sessionId');
+      if (!env.DB || !isStrongId(sid)) return jsonResponse({ error: 'Invalid session' }, 400, cors);
+      if (await isRateLimited(env.VISIT_LIMITER, request)) return jsonResponse({ error: RATE_LIMIT_MSG.en }, 429, cors);
+      const after = Math.max(0, parseInt(url.searchParams.get('after') || '', 10) || 0);
+      try {
+        const poll = await listLiveMessages(env, sid, after);
+        if (!poll) return jsonResponse({ error: 'Unknown conversation' }, 404, cors);
+        return jsonResponse(poll, 200, { ...cors, 'cache-control': 'no-store' });
+      } catch (e) {
+        console.error('messages poll failed:', (e as Error)?.message);
+        return jsonResponse({ error: 'Unavailable' }, 503, cors);
+      }
+    }
+
+    // Rating after the team resolved a conversation it took part in. Once only.
+    if (request.method === 'POST' && url.pathname === '/api/csat') {
+      if (cors['access-control-allow-origin'] === 'null') {
+        return jsonResponse({ error: 'Origin not allowed' }, 403, cors);
+      }
+      let body: CsatRequestBody;
+      try {
+        body = (await request.json()) as CsatRequestBody;
+      } catch {
+        return jsonResponse({ error: 'Invalid JSON body' }, 400, cors);
+      }
+      if (await isRateLimited(env.LEAD_LIMITER, request)) return jsonResponse({ error: RATE_LIMIT_MSG.en }, 429, cors);
+      const score = body.score;
+      if (!env.DB || !isStrongId(body.sessionId) || typeof score !== 'number' || !Number.isInteger(score) || score < 1 || score > 5) {
+        return jsonResponse({ error: 'Invalid rating' }, 400, cors);
+      }
+      const comment = typeof body.comment === 'string' ? body.comment.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ').trim().slice(0, 500) : '';
+      try {
+        const saved = await saveCsat(env, body.sessionId, score, comment);
+        return saved ? jsonResponse({ ok: true }, 200, cors) : jsonResponse({ ok: false }, 409, cors);
+      } catch (e) {
+        console.error('csat failed:', (e as Error)?.message);
+        return jsonResponse({ ok: false }, 502, cors);
+      }
     }
 
     // Admin: (re)build the KB vector index from the bundled docs. Guarded by a

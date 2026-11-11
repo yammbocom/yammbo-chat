@@ -65,6 +65,19 @@ key pair is generated once and stored in the D1 `settings` table. Needs migratio
 deploying: the new code writes the new columns, and without them every chat turn fails to persist
 (the chat keeps answering, so the failure is silent).
 
+### Shared inbox (live replies)
+
+The team can take a conversation over from the panel (reply, return it to the assistant, resolve it),
+tag it, leave internal notes, use canned replies (`/` in the composer), ask the AI for a draft and, after
+resolving a conversation it took part in, collect a 1-5 rating. Visitor side: `POST /api/handoff`,
+`GET /api/messages` (polling), `POST /api/csat`. Needs migration `migrations/0003_inbox.sql`
+(`wrangler d1 migrations apply yammbo-chat --remote`) applied BEFORE deploying: the chat upsert now
+writes `conversations.status`, so without the migration every chat turn fails to persist.
+The widget mints 192-bit session ids; `/api/handoff`, `/api/messages` and `/api/csat` only accept ids of
+32+ chars (the session id is their credential), so older short ids keep chatting but cannot be taken over.
+Replies are also emailed to visitors who left an address, but only once `ZEPTOMAIL_API_TOKEN` exists
+(inactive today; if it is ever set, update `src/privacy.ts`).
+
 Local testing without Telegram: put `PANEL_DEV_CODE="K7M2Q9XA"` (8 characters of the alphabet above)
 in `.dev.vars` (gitignored). It is only honoured for requests to localhost/127.0.0.1. Never set it as
 a production secret.

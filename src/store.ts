@@ -128,6 +128,7 @@ export async function persistChatTurn(env: StoreEnv, turn: ChatTurn): Promise<Pe
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              updated_at = excluded.updated_at,
+             status = 'open',
              page_url = COALESCE(excluded.page_url, conversations.page_url),
              product = COALESCE(excluded.product, conversations.product),
              lang = excluded.lang,
@@ -235,7 +236,8 @@ export async function saveFeedback(env: StoreEnv, sessionId: string, messageId: 
   }
 }
 
-// Retention: chat data 90 days, leads 365 days.
+// Retention: chat data 90 days, leads 365 days. Internal notes and tags go with
+// their conversation; canned replies are never purged.
 export async function purgeOld(env: StoreEnv, now = Date.now()): Promise<void> {
   if (!env.DB) return;
   try {
@@ -258,5 +260,16 @@ export async function purgeOld(env: StoreEnv, now = Date.now()): Promise<void> {
     console.log('retention purge page_views ok', res.meta?.changes ?? 0);
   } catch (e) {
     console.error('retention purge page_views failed:', (e as Error)?.message);
+  }
+  // Separate again: notes and conversation_tags come from migration 0003. They are
+  // removed once their conversation is gone (the conversation purge above runs first).
+  try {
+    const res = await env.DB.batch([
+      env.DB.prepare('DELETE FROM notes WHERE session_id NOT IN (SELECT id FROM conversations)'),
+      env.DB.prepare('DELETE FROM conversation_tags WHERE session_id NOT IN (SELECT id FROM conversations)'),
+    ]);
+    console.log('retention purge notes/tags ok', JSON.stringify(res.map((r) => r.meta?.changes ?? 0)));
+  } catch (e) {
+    console.error('retention purge notes/tags failed:', (e as Error)?.message);
   }
 }

@@ -6,7 +6,7 @@
 // (gemini-3.6-flash). The Gemini stream is repackaged into OpenAI-style SSE frames
 // so the widget client doesn't need to know which provider answered.
 
-import { BRAIN_CORE, buildKbSection, buildKbSectionFromChunks } from './system-prompt';
+import { BRAIN_CORE, DRAFT_CORE, buildKbSection, buildKbSectionFromChunks } from './system-prompt';
 import kbBundle from './kb-bundle.json';
 import type { KbChunk } from './rag';
 
@@ -35,6 +35,12 @@ export function buildSystemPrompt(chunks: KbChunk[], pageLine = ''): string {
 // language's docs; full bodies would blow Groq's TPM limit.
 export function buildSystemPromptFull(lang: Lang, pageLine = ''): string {
   return BRAIN_CORE + (pageLine ? `\n\n${pageLine}` : '') + buildKbSection(KB[lang] || []);
+}
+
+// Prompt for the panel's "suggest a reply" draft: same KB sections as the bot.
+// `chunks` null = retrieval failed, fall back to the title/URL index.
+export function buildDraftPrompt(chunks: KbChunk[] | null, lang: Lang, pageLine = ''): string {
+  return DRAFT_CORE + (pageLine ? `\n\n${pageLine}` : '') + (chunks ? buildKbSectionFromChunks(chunks) : buildKbSection(KB[lang] || []));
 }
 
 export interface BrainEnv {
@@ -262,4 +268,54 @@ export async function streamReply(
       },
     }),
   };
+}
+
+// ─── Non-streaming completion (panel draft) ─────────────────────────────────
+
+// One complete answer, Groq first and Gemini when Groq fails for any reason (a
+// human is waiting for the draft, so the permanent-error short-circuit of
+// streamReply is not worth it here). Null when neither provider answered.
+export async function completeReply(
+  env: BrainEnv,
+  systemPrompt: string,
+  history: ChatMessage[],
+): Promise<{ text: string; provider: 'groq' | 'gemini' } | null> {
+  try {
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'authorization': `Bearer ${env.GROQ_API_KEY}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: env.GROQ_MODEL,
+        temperature: 0.4,
+        max_tokens: 1000,
+        include_reasoning: false,
+        reasoning_effort: 'low',
+        stream: false,
+        messages: [{ role: 'system', content: systemPrompt }, ...history],
+      }),
+    });
+    if (res.ok) {
+      const j = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
+      const text = j.choices?.[0]?.message?.content?.trim();
+      if (text) return { text, provider: 'groq' };
+    } else {
+      await res.body?.cancel().catch(() => {});
+    }
+  } catch (e) {
+    console.error('draft groq failed:', (e as Error)?.message);
+  }
+  if (!env.GEMINI_API_KEY) return null;
+  try {
+    const res = await callGemini(env, systemPrompt, history);
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => {});
+      return null;
+    }
+    const j = (await res.json()) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+    const text = j.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('').trim();
+    return text ? { text, provider: 'gemini' } : null;
+  } catch (e) {
+    console.error('draft gemini failed:', (e as Error)?.message);
+    return null;
+  }
 }

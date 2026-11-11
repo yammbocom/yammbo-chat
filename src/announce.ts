@@ -37,7 +37,7 @@ async function takeConversationAlertSlot(db: D1Database | undefined): Promise<bo
   return (await hit(db, 'conv_alerts', 3600_000)) <= MAX_CONVERSATION_ALERTS_PER_HOUR;
 }
 
-function where(c: NewConversation): string {
+function where(c: { country: string | null; city: string | null }): string {
   const flag = flagEmoji(c.country);
   return [flag && c.country ? `${flag} ${c.country}` : c.country, c.city].filter(Boolean).join(' · ') || '—';
 }
@@ -84,4 +84,66 @@ export async function pushNewLead(env: PushEnv, name: string, channel: string): 
     body: channel ? `${name} · prefiere ${channel}` : name,
     url: '/panel/#/leads',
   });
+}
+
+// Live inbox alerts ------------------------------------------------------------------
+// Visitor messages while the team is in charge, and "talk to a person" requests.
+// Same shape as announceNewConversation: best-effort, silent on failure, capped
+// with an atomic D1 counter so a script cannot flood Telegram or the phones.
+const MAX_HUMAN_MSG_ALERTS_PER_HOUR = 120;
+const MAX_HANDOFF_ALERTS_PER_HOUR = 60;
+
+export interface LiveAlert {
+  sessionId: string;
+  city: string | null;
+  country: string | null;
+  text: string;
+}
+
+function placeOf(a: { city: string | null; country: string | null }): string {
+  return a.city || a.country || 'Visitante';
+}
+function panelLink(sessionId: string): string {
+  return `${PANEL_ORIGIN}/panel/#/c/${encodeURIComponent(sessionId)}`;
+}
+
+export async function announceHumanMessage(env: AnnounceEnv, a: LiveAlert): Promise<void> {
+  try {
+    if (!env.DB || (await hit(env.DB, 'human_msgs', 3600_000)) > MAX_HUMAN_MSG_ALERTS_PER_HOUR) return;
+    const text = a.text.replace(/\s+/g, ' ').trim().slice(0, FIRST_QUESTION_MAX);
+    await Promise.all([
+      sendTelegram(env, `<b>💬 ${escapeHtml(placeOf(a))}:</b> ${escapeHtml(text)}\n<a href="${panelLink(a.sessionId)}">Abrir en el panel</a>`).catch((e) =>
+        console.error('telegram live alert failed:', (e as Error)?.message),
+      ),
+      sendPushToAll(env, { title: `💬 ${placeOf(a)}`, body: text, url: `/panel/#/c/${encodeURIComponent(a.sessionId)}` }),
+    ]);
+  } catch (e) {
+    console.error('announceHumanMessage failed:', (e as Error)?.message);
+  }
+}
+
+export async function announceHandoff(env: AnnounceEnv, a: LiveAlert): Promise<void> {
+  try {
+    if (!env.DB || (await hit(env.DB, 'handoff_alerts', 3600_000)) > MAX_HANDOFF_ALERTS_PER_HOUR) return;
+    const text = a.text.replace(/\s+/g, ' ').trim().slice(0, FIRST_QUESTION_MAX);
+    await Promise.all([
+      sendTelegram(
+        env,
+        [
+          '<b>🙋 Pide hablar con una persona</b>',
+          `<b>Desde:</b> ${escapeHtml(where(a))}`,
+          `<b>Última pregunta:</b> ${escapeHtml(text || '—')}`,
+          `<a href="${panelLink(a.sessionId)}">Responder en el panel</a>`,
+        ].join('\n'),
+      ).catch((e) => console.error('telegram handoff alert failed:', (e as Error)?.message)),
+      sendPushToAll(env, {
+        title: '🙋 Pide hablar con una persona',
+        body: `${placeOf(a)}${text ? ' · ' + text : ''}`,
+        url: `/panel/#/c/${encodeURIComponent(a.sessionId)}`,
+        urgency: 'high',
+      }),
+    ]);
+  } catch (e) {
+    console.error('announceHandoff failed:', (e as Error)?.message);
+  }
 }

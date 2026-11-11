@@ -27,6 +27,9 @@ export interface PushPayload {
   title: string;
   body: string;
   url: string;
+  // 'high' asks the push service to deliver at once (used for "wants a person").
+  // It travels as an HTTP header, not inside the encrypted payload.
+  urgency?: 'high';
 }
 
 export interface PushSubscriptionRow {
@@ -176,7 +179,8 @@ export interface PushSendResult {
 
 export async function sendWebPush(sub: PushSubscriptionRow, payload: PushPayload, vapid: VapidKeys): Promise<PushSendResult> {
   try {
-    const body = await encryptPayload(enc.encode(JSON.stringify(payload)), sub.p256dh, sub.auth);
+    const { urgency, ...message } = payload;
+    const body = await encryptPayload(enc.encode(JSON.stringify(message)), sub.p256dh, sub.auth);
     const audience = new URL(sub.endpoint).origin;
     const jwt = await signVapidJwt(audience, vapid.privateJwk);
     const res = await fetch(sub.endpoint, {
@@ -186,6 +190,7 @@ export async function sendWebPush(sub: PushSubscriptionRow, payload: PushPayload
         'content-encoding': 'aes128gcm',
         'content-type': 'application/octet-stream',
         ttl: String(PUSH_TTL_SECONDS),
+        ...(urgency ? { urgency } : {}),
       },
       body,
     });
@@ -206,7 +211,7 @@ export async function sendPushToAll(env: PushEnv, payload: PushPayload): Promise
     if (!subs.length) return;
     const vapid = await getVapidKeys(env.DB);
     if (!vapid) return;
-    const safe: PushPayload = { title: payload.title.slice(0, 100), body: payload.body.slice(0, 240), url: payload.url.slice(0, 200) };
+    const safe: PushPayload = { title: payload.title.slice(0, 100), body: payload.body.slice(0, 240), url: payload.url.slice(0, 200), urgency: payload.urgency };
     const results = await Promise.all(subs.map((s) => sendWebPush(s, safe, vapid)));
     const dead = subs.filter((_, i) => results[i].gone);
     if (dead.length) {
