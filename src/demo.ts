@@ -28,7 +28,7 @@ export const DEMO_HTML = `<!DOCTYPE html>
 <main>
   <span class="pill">demo</span>
   <h1>Yammbo chat — embeddable widget</h1>
-  <p class="lead">Página de prueba aislada. El bubble negro abajo a la derecha abre el chat. Probalo en móvil y desktop.</p>
+  <p class="lead">Página de prueba aislada. La burbuja azul abajo a la derecha abre el chat. Pruébalo en móvil y desktop.</p>
 
   <h2>Preguntas para probar</h2>
   <ul>
@@ -36,7 +36,7 @@ export const DEMO_HTML = `<!DOCTYPE html>
     <li>Quiero abrir una tienda online, qué necesito?</li>
     <li>Cuánto cuesta Yammbo POS?</li>
     <li>No puedo iniciar sesión, qué hago?</li>
-    <li>How is Yammbo Flow different from Zapier?</li>
+    <li>Does Yammbot work with WhatsApp?</li>
   </ul>
 
   <h2>Cómo embeber en otros sitios</h2>

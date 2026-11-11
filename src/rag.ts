@@ -20,6 +20,7 @@ type Lang = 'en' | 'es';
 type KbDoc = { slug: string; url: string; title: string; description: string; product: string; body: string };
 type KbBundle = Record<Lang, KbDoc[]>;
 const KB = kbBundle as KbBundle;
+const LIVE_SLUGS = new Set([...KB.en, ...KB.es].map((d) => d.slug));
 
 export const EMBED_MODEL = '@cf/baai/bge-m3';
 const MAX_CHUNK_CHARS = 1400; // keep each chunk well under bge-m3's 512-token cap
@@ -212,8 +213,11 @@ export async function retrieve(
   const q = (query || '').slice(0, 1200).trim();
   if (!q) return [];
   const [vec] = await embed(env, [q]);
+  // Over-fetch, then drop vectors whose doc is no longer in the bundle: an
+  // index built before orphan tracking keeps ids the purge never learned about
+  // (they answered with the retired Yammbo Flow and 404 slugs after the KB swap).
   const res = await env.KB_INDEX.query(vec, {
-    topK,
+    topK: topK * 2,
     returnMetadata: 'all',
     filter: { lang },
   });
@@ -222,7 +226,8 @@ export async function retrieve(
   for (const m of matches) {
     if (typeof m.score === 'number' && m.score < minScore) continue;
     const md = (m.metadata || {}) as Record<string, string>;
-    if (!md.text) continue;
+    if (!md.text || !LIVE_SLUGS.has(md.slug || '')) continue;
+    if (out.length >= topK) break;
     out.push({
       slug: md.slug || '',
       title: md.title || '',
