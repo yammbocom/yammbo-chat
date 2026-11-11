@@ -15,6 +15,10 @@
 //   POST /panel/api/conversations/:id/reply | mode | status | draft
 //   POST|DELETE /panel/api/conversations/:id/tags[/:tag]   GET|POST|DELETE .../notes[/:noteId]
 //   GET /panel/api/tags   GET|POST /panel/api/canned   POST|DELETE /panel/api/canned/:id
+//   Live visitors and proactive rules (see presence.ts, triggers.ts, gaps.ts):
+//   GET  /panel/api/presence   POST /panel/api/presence/:id/message
+//   GET|POST /panel/api/triggers   POST|DELETE /panel/api/triggers/:id
+//   GET  /panel/api/gaps   POST /panel/api/gaps/draft
 //
 // Every query uses bound parameters. Every /panel/api route except login needs a
 // valid session (401) and every POST/DELETE needs the x-requested-with: panel header
@@ -31,6 +35,9 @@ import { PANEL_APP_JS } from './panel-app';
 import type { BrainEnv } from './brain';
 import type { RagEnv } from './rag';
 import * as inbox from './panel-inbox';
+import * as presence from './presence';
+import * as triggers from './triggers';
+import * as gaps from './gaps';
 import icon192 from './panel-icons/icon-192.png';
 import icon512 from './panel-icons/icon-512.png';
 
@@ -299,6 +306,15 @@ interface KeyCount {
   n: number;
 }
 
+// A malformed escape in a path segment is "not found", not a server error.
+function safeDecode(v: string): string {
+  try {
+    return decodeURIComponent(v);
+  } catch {
+    return '';
+  }
+}
+
 async function stats(env: PanelEnv, url: URL): Promise<Response> {
   const db = env.DB!;
   const requested = parseInt(url.searchParams.get('days') || '', 10);
@@ -334,6 +350,7 @@ async function stats(env: PanelEnv, url: URL): Promise<Response> {
       .bind(tzMs, since), // 10
     db.prepare('SELECT COUNT(csat) AS n, AVG(csat) AS avg FROM conversations WHERE csat_at >= ?').bind(since), // 11
     db.prepare("SELECT COUNT(*) AS n FROM conversations WHERE mode = 'waiting'"), // 12
+    db.prepare('SELECT COUNT(*) AS n FROM presence WHERE last_seen >= ?').bind(now - presence.ONLINE_MS), // 13
   ]);
   const rows = <T>(i: number) => (res[i].results ?? []) as T[];
 
@@ -361,6 +378,7 @@ async function stats(env: PanelEnv, url: URL): Promise<Response> {
       csatAvg: cs.avg === null ? null : Math.round(cs.avg * 10) / 10,
     },
     waiting: rows<CountRow>(12)[0]?.n ?? 0,
+    online: rows<CountRow>(13)[0]?.n ?? 0,
     series,
     products: rows<KeyCount>(6),
     countries: rows<KeyCount>(7),
@@ -772,6 +790,33 @@ export async function handlePanel(request: Request, env: PanelEnv, url: URL, ctx
       else if (isValidId(cid) && method === 'POST') out = await inbox.saveCanned(env, cid, await bodyJson());
       else if (isValidId(cid) && method === 'DELETE') out = await inbox.deleteCanned(env, cid);
       if (out) return jsonResponse(out.data, out.status);
+    }
+    // Live visitors, proactive rules, Help Center gaps.
+    if (method === 'GET' && path === '/panel/api/presence') {
+      const out = await presence.listOnline(env);
+      return jsonResponse(out.data, out.status);
+    }
+    const presenceMsg = /^\/panel\/api\/presence\/([^/]+)\/message$/.exec(path);
+    if (method === 'POST' && presenceMsg) {
+      const out = await presence.sendProactive(env, safeDecode(presenceMsg[1]), await readJson(request));
+      return jsonResponse(out.data, out.status);
+    }
+    if (path === '/panel/api/triggers' || path.startsWith('/panel/api/triggers/')) {
+      const tid = path === '/panel/api/triggers' ? '' : safeDecode(path.slice('/panel/api/triggers/'.length));
+      let out: inbox.Out | null = null;
+      if (method === 'GET' && tid === '') out = await triggers.listTriggers(env);
+      else if (method === 'POST' && tid === '') out = await triggers.saveTrigger(env, null, await readJson(request));
+      else if (isValidId(tid) && method === 'POST') out = await triggers.saveTrigger(env, tid, await readJson(request));
+      else if (isValidId(tid) && method === 'DELETE') out = await triggers.deleteTrigger(env, tid);
+      if (out) return jsonResponse(out.data, out.status);
+    }
+    if (method === 'GET' && path === '/panel/api/gaps') {
+      const out = await gaps.listGaps(env, url);
+      return jsonResponse(out.data, out.status);
+    }
+    if (method === 'POST' && path === '/panel/api/gaps/draft') {
+      const out = await gaps.draftArticle(env, await readJson(request));
+      return jsonResponse(out.data, out.status);
     }
     if (method === 'GET' && path === '/panel/api/leads') return await listLeads(env, url);
     if (method === 'GET' && path === '/panel/api/unanswered') return await listUnanswered(env, url);

@@ -40,15 +40,17 @@ binding = "AI"
 binding = "KB_INDEX"
 index_name = "yammbo-kb"
 
-# D1 — chat transcripts, leads, feedback, panel page views, push subscriptions, inbox (notes, tags, canned replies)
-# (retention handled in scheduled()). Schema: migrations/0001_init.sql, 0002_panel.sql, 0003_inbox.sql
+# D1 — chat transcripts, leads, feedback, panel page views, push subscriptions, inbox (notes, tags, canned replies),
+# live presence + proactive rules (retention handled in scheduled()).
+# Schema: migrations/0001_init.sql, 0002_panel.sql, 0003_inbox.sql, 0004_live.sql
 [[d1_databases]]
 binding = "DB"
 database_name = "yammbo-chat"
 database_id = "934ca26c-f303-4628-8ce4-90d1df9d9910"
 
 # Workers Rate Limiting (per CF-Connecting-IP). Chat + feedback share one budget;
-# POST /api/visit has its own so page tracking never eats the chat's allowance.
+# POST /api/visit has its own so page tracking never eats the chat's allowance;
+# presence heartbeats have theirs too.
 [[unsafe.bindings]]
 name = "CHAT_LIMITER"
 type = "ratelimit"
@@ -66,6 +68,13 @@ name = "VISIT_LIMITER"
 type = "ratelimit"
 namespace_id = "1003"
 simple = { limit = 40, period = 60 }
+
+# Presence heartbeats (every 30 s per open tab) and leave beacons.
+[[unsafe.bindings]]
+name = "PRESENCE_LIMITER"
+type = "ratelimit"
+namespace_id = "1004"
+simple = { limit = 60, period = 60 }
 
 # Secrets (set via: wrangler secret put <NAME>)
 # - GROQ_API_KEY

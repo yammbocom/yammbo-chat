@@ -78,12 +78,44 @@ The widget mints 192-bit session ids; `/api/handoff`, `/api/messages` and `/api/
 Replies are also emailed to visitors who left an address, but only once `ZEPTOMAIL_API_TOKEN` exists
 (inactive today; if it is ever set, update `src/privacy.ts`).
 
+### Live visitors, proactive messages and Help Center gaps
+
+- **Online now** (panel «En línea»): the widget sends `POST /api/presence` every 30 s while the tab is
+  visible (and a `sendBeacon` to `/api/presence/leave` on exit); it stops after 30 minutes without
+  pointerdown/keydown/scroll/touchstart until the next input. The presence id is 128 random bits kept in
+  the tab's memory (nothing is stored in the browser): on single-page sites it survives route changes, and
+  closing or reloading the tab makes another. A browser that sends Global Privacy Control or Do Not Track
+  sends nothing, unless the visitor already uses the chat. Rows older than 15 minutes are purged by the
+  panel list endpoint and by the 15-minute cron, so a row lives at most about 30 minutes after the last
+  signal (`last_seen` is deliberately not indexed: it changes on every heartbeat). Heartbeats and leave
+  beacons use their own `PRESENCE_LIMITER` (60/min per IP); the global cap of new presence rows is
+  600/min and only degrades presence. The team can write first
+  (`POST /panel/api/presence/:id/message`): the text waits in `proactive_inbox`, the next heartbeat hands
+  it to the widget, and a conversation (role `agent`, mode `human`) is only created when the visitor opens
+  the teaser (`POST /api/proactive/accept`, which validates against `proactive_inbox` + presence id and
+  works even if the presence row is gone). Unopened team messages are kept 1 h after creation or
+  delivery, independent of the presence row. The widget shows no teaser while the site hides the bubble.
+- **Proactive rules** (panel Ajustes -> Mensajes proactivos): table `triggers`; pattern syntax
+  `[host][/path-prefix]` documented in `src/triggers.ts` and in the panel. The widget reads
+  `GET /api/triggers` (cached 300 s), shows one teaser per page load and reports `shown`/`opened` with
+  `POST /api/triggers/:id/event`.
+- **Gaps** (panel Sin respuesta -> Huecos): questions of the last 30 days that got a thumbs down, a handoff,
+  no KB hit or asked for a person are embedded with the same Workers AI model as the RAG, grouped
+  greedily by cosine similarity (default 0.82) and cached in KV for 1 h. «Proponer artículo»
+  (`POST /panel/api/gaps/draft`, 20/h) sends the unanswered visitor questions (up to 30 days) to Groq or
+  Gemini for an MDX draft for help.yammbo.com; nothing is published automatically (disclosed in
+  `src/privacy.ts`).
+- Needs migration `migrations/0004_live.sql` (`wrangler d1 migrations apply yammbo-chat --remote`)
+  applied BEFORE deploying: without it the panel Inicio fails (its stats query `presence`) and the new
+  endpoints answer 503/500 (the chat itself keeps working). Update `src/privacy.ts` if what is stored changes.
+
 Local testing without Telegram: put `PANEL_DEV_CODE="K7M2Q9XA"` (8 characters of the alphabet above)
 in `.dev.vars` (gitignored). It is only honoured for requests to localhost/127.0.0.1. Never set it as
 a production secret.
 
 ```bash
 node scripts/push-selftest.mjs        # Web Push encryption vs an independent node:crypto decryptor
+node scripts/live-selftest.mjs        # gaps, rule matcher, presence accept/purge against an in-memory D1 stub
 node scripts/make-panel-icons.mjs     # regenerates src/panel-icons/*.png
 ```
 

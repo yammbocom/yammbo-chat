@@ -7,6 +7,9 @@
 // Live inbox: when the visitor asks for a person the conversation moves to the
 // team; the widget then polls /api/messages (see "Live conversation" below) and
 // shows the team's messages, system lines and a one-time rating card.
+// Presence + proactive messages: an in-memory presence id (never stored in the browser)
+// sends a heartbeat so the team sees who is online, and brings back messages the team
+// wrote first; proactive rules (GET /api/triggers) can show a teaser next to the bubble.
 // No dependencies. All class names prefixed `yc-`.
 
 export const WIDGET_JS = `(function () {
@@ -20,6 +23,7 @@ export const WIDGET_JS = `(function () {
   var LANG_KEY = 'yammbo-chat-lang';
   var MODE_KEY = 'yammbo-chat-mode';
   var AFTER_KEY = 'yammbo-chat-after';
+  var TEASER_OFF_KEY = 'yammbo-chat-teaser-off'; // sessionStorage: the visitor closed a rule teaser in this tab
   var MAX_HISTORY = 20;
 
   // i18n -----------------------------------------------------------------
@@ -68,7 +72,9 @@ export const WIDGET_JS = `(function () {
       newMsg: 'mensaje nuevo del equipo',
       sys: { 'sys:waiting': 'Pediste hablar con una persona', 'sys:joined': 'El equipo se unió', 'sys:returned': 'Conversación devuelta al asistente', 'sys:resolved': 'Conversación resuelta' },
       csatTitle: '¿Te ayudamos?', starLabel: '{n} de 5 estrellas', csatComment: 'Comentario (opcional)',
-      csatSend: 'Enviar valoración', csatThanks: '¡Gracias por tu valoración!', csatErr: 'No se pudo enviar. Inténtalo de nuevo.'
+      csatSend: 'Enviar valoración', csatThanks: '¡Gracias por tu valoración!', csatErr: 'No se pudo enviar. Inténtalo de nuevo.',
+      teaserClose: 'Cerrar mensaje',
+      teamLost: 'No pudimos abrir el mensaje del equipo. Escríbenos aquí y te respondemos.'
     },
     en: {
       title: 'Yammbo', open: 'Open chat', close: 'Close', back: 'Back', send: 'Send',
@@ -106,7 +112,9 @@ export const WIDGET_JS = `(function () {
       newMsg: 'new message from the team',
       sys: { 'sys:waiting': 'You asked to talk to a person', 'sys:joined': 'The team joined', 'sys:returned': 'Conversation handed back to the assistant', 'sys:resolved': 'Conversation resolved' },
       csatTitle: 'Did we help?', starLabel: '{n} of 5 stars', csatComment: 'Comment (optional)',
-      csatSend: 'Send rating', csatThanks: 'Thanks for your rating!', csatErr: 'Could not send. Try again.'
+      csatSend: 'Send rating', csatThanks: 'Thanks for your rating!', csatErr: 'Could not send. Try again.',
+      teaserClose: 'Dismiss message',
+      teamLost: 'We could not open the team message. Write to us here and we will answer.'
     }
   };
   var lang = detectLang();
@@ -350,6 +358,13 @@ export const WIDGET_JS = `(function () {
     '.yc-field.yc-err input{border-color:var(--yc-fg);box-shadow:0 0 0 1px var(--yc-fg)}',
     '.yc-submit{padding:12px;font-size:14px}.yc-submit:disabled{background:var(--yc-soft2);color:var(--yc-muted);cursor:not-allowed}',
     '.yc-result{padding:24px 18px;text-align:center;font-size:14px;line-height:1.5;color:var(--yc-fg)}',
+    // teaser next to the bubble (proactive rules and messages the team wrote first)
+    '.yc-teaser{position:fixed;right:20px;bottom:88px;width:300px;max-width:calc(100vw - 40px);background:var(--yc-bg);color:var(--yc-fg);border:1px solid var(--yc-line-strong);border-radius:12px;z-index:2147483646;font-family:' + FONT + ';animation:yc-in .18s ease-out}',
+    '.yc-teaser.yc-team{border-color:var(--yc-fg)}',
+    '.yc-teaser-body{display:block;width:100%;text-align:left;background:transparent;border:none;cursor:pointer;color:inherit;padding:12px 40px 12px 14px;border-radius:12px;font-size:13.5px;line-height:1.45}.yc-teaser-body:hover{background:var(--yc-hover)}',
+    '.yc-teaser-who{display:block;font-size:11px;font-weight:700;letter-spacing:.02em;margin-bottom:3px}',
+    '.yc-teaser-text{display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden;white-space:pre-wrap;overflow-wrap:anywhere}',
+    '.yc-teaser-x{position:absolute;top:6px;right:6px;background:transparent;border:none;cursor:pointer;color:var(--yc-muted);padding:5px;border-radius:8px;display:flex}.yc-teaser-x:hover{background:var(--yc-hover);color:var(--yc-fg)}',
     // bottom nav
     '.yc-nav{display:flex;border-top:1px solid var(--yc-line);background:var(--yc-bg);flex-shrink:0}',
     '.yc-nav button{flex:1;background:transparent;border:none;cursor:pointer;padding:9px 0 7px;display:flex;flex-direction:column;align-items:center;gap:3px;color:var(--yc-muted);font-size:11px}',
@@ -357,10 +372,11 @@ export const WIDGET_JS = `(function () {
     '@media (max-width:480px){',
       '.yc-panel{right:0;bottom:0;top:0;left:0;width:100vw;max-width:100vw;height:100vh;height:100dvh;max-height:100dvh;border-radius:0;border:none}',
       '.yc-bubble{right:14px;bottom:14px}',
+      '.yc-teaser{right:14px;bottom:82px;max-width:calc(100vw - 28px)}',
       '.yc-head{padding-top:max(14px,env(safe-area-inset-top))}',
       '.yc-nav{padding-bottom:max(0px,env(safe-area-inset-bottom))}',
     '}',
-    '@media (prefers-reduced-motion: reduce){#yammbo-chat-root *{animation:none!important;transition:none!important}}'
+    '@media (prefers-reduced-motion: reduce){#yammbo-chat-root *,.yc-teaser{animation:none!important;transition:none!important}}'
   ].join('');
 
   var style = document.createElement('style'); style.textContent = css; document.head.appendChild(style);
@@ -679,13 +695,18 @@ export const WIDGET_JS = `(function () {
     // the server is asked once whether the team took the conversation over.
     setDot(false);
     if (hasConv() && Date.now() - lastPollAt > 3000) poll();
+    if (teamMsgs.length) acceptTeam();
     setTimeout(function () { input.focus(); }, 50);
   }
   function paintChat() {
     chatBody.innerHTML = '';
-    if (newChatBtn) newChatBtn.hidden = !chatLog.length;
-    if (!chatLog.length) {
-      chatBody.appendChild(el('<div class="yc-muted">' + t.chatEmpty + '</div>'));
+    // A history made only of the proactive teaser line has no visitor message yet: it
+    // looks like a fresh chat (suggestions below the assistant's line, no "new conversation").
+    var onlyTeaser = chatLog.length > 0 && chatLog.every(function (m) { return m.teaser; });
+    if (newChatBtn) newChatBtn.hidden = !chatLog.length || onlyTeaser;
+    if (!chatLog.length || onlyTeaser) {
+      if (onlyTeaser) chatLog.forEach(function (m) { addMsg(m.role, m.content, false); });
+      else chatBody.appendChild(el('<div class="yc-muted">' + t.chatEmpty + '</div>'));
       var sg = el('<div class="yc-sugg"></div>');
       suggestions().forEach(function (q) {
         var c = el('<button class="yc-chip">' + esc(q) + '</button>');
@@ -842,7 +863,9 @@ export const WIDGET_JS = `(function () {
     var text = (preset || input.value).trim().slice(0, 2000); if (!text) return;
     busy = true;
     input.value = ''; input.style.height = 'auto';
+    var onlyTeaserSend = chatLog.length > 0 && chatLog.every(function (m) { return m.teaser; });
     if (!chatLog.length) chatBody.innerHTML = '';
+    else if (onlyTeaserSend) { var sgOld = chatBody.querySelector('.yc-sugg'); if (sgOld) sgOld.remove(); }
     addMsg('user', text, true);
     if (newChatBtn) newChatBtn.hidden = false;
     var typing = showTyping();
@@ -949,6 +972,7 @@ export const WIDGET_JS = `(function () {
   // Open/close -----------------------------------------------------------
   function open() {
     if (isOpen()) return;
+    hideTeaser();
     panel.classList.remove('yc-hidden');
     stack = [{ v: 'home' }];
     window.history.pushState({ yc: 1 }, ''); // sentinel: widget open at home
@@ -960,6 +984,7 @@ export const WIDGET_JS = `(function () {
     panel.classList.add('yc-hidden');
     stack = [{ v: 'home' }];
     schedulePoll();
+    if (teamMsgs.length) showTeaser('team', teamMsgs[teamMsgs.length - 1].text);
     // Unwind the entries we added so the site's own history stays intact.
     if (depth > 0) window.history.go(-depth);
   }
@@ -976,7 +1001,12 @@ export const WIDGET_JS = `(function () {
       schedulePoll();
     }
   });
-  bubble.addEventListener('click', function () { isOpen() ? close() : open(); });
+  bubble.addEventListener('click', function () {
+    if (isOpen()) { close(); return; }
+    // A message the team wrote first is waiting: the bubble opens it, same as the teaser.
+    if (teamMsgs.length) { hideTeaser(); open(); go('chat'); return; }
+    open();
+  });
 
   // Live conversation ------------------------------------------------------
   // The server is asked for the team's messages only when it can matter:
@@ -987,7 +1017,10 @@ export const WIDGET_JS = `(function () {
   //   never while the tab is hidden, and never without a conversation.
   // Errors and 429s stretch the interval (x2 per failure, up to x8).
   var pollTimer = null, pollBusy = false, pollFails = 0, lastPollAt = 0;
-  function hasConv() { return chatLog.length > 0 && canLive(); }
+  // The visitor wrote (or the team did): there is a conversation on the server. A
+  // history made only of a teaser line (see openTeaser) is not one.
+  function started() { return chatLog.some(function (m) { return m.role === 'user' || m.role === 'agent'; }); }
+  function hasConv() { return started() && canLive(); }
   function chatActive() { return isOpen() && topView().v === 'chat' && !!chatBody; }
   function pollDelay() {
     if (!hasConv()) return 0;
@@ -1066,6 +1099,8 @@ export const WIDGET_JS = `(function () {
   document.addEventListener('visibilitychange', function () {
     if (document.hidden) { clearTimeout(pollTimer); pollTimer = null; return; }
     if (pollDelay()) poll();
+    if (Date.now() - hbLast > 10000) beat();
+    if (pendingRule) fireRule(pendingRule);
   });
   // Returning visitor whose conversation is with the team: look for news soon after load.
   if (hasConv() && liveMode !== 'bot') setTimeout(poll, 1500);
@@ -1073,11 +1108,187 @@ export const WIDGET_JS = `(function () {
   // Page visit, reported once per page load and ONLY when this visitor already
   // used the chat (stored history). Nobody else is tracked. The server ignores
   // it unless the conversation exists, and keeps just the URL without query.
-  if (chatLog.length) {
+  if (started()) {
     try {
       var pg = pageInfo();
       fetch(BASE + '/api/visit', { method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sessionId: sessionId(), url: pg.url, title: pg.title }) }).catch(function () {});
     } catch (_) {}
   }
+
+  // Presence ---------------------------------------------------------------
+  // The team sees "who is online" from a heartbeat. Privacy by design: the id is 128
+  // random bits made in memory for THIS page load (nothing is written to the browser, so
+  // it cannot follow the visitor to another page). A browser that sends Global Privacy
+  // Control or Do Not Track sends nothing, unless the visitor already uses the chat (then
+  // the presence is tied to their conversation). Beats stop after 30 minutes without
+  // pointer, key, scroll or touch input (and while the tab is hidden) and resume on the next
+  // input. The row is deleted server-side 15 minutes after the last beat (at most about 30).
+  var presenceId = (function () {
+    try {
+      var a = new Uint8Array(16); crypto.getRandomValues(a);
+      var s = ''; for (var i = 0; i < a.length; i++) s += String.fromCharCode(a[i]);
+      return btoa(s).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '');
+    } catch (_) { return null; }
+  })();
+  var hbLast = 0, hbBusy = false, hbSent = false, acceptBusy = false;
+  var IDLE_MS = 30 * 60000, lastAct = Date.now(), hbIdle = false;
+  function onAct() { lastAct = Date.now(); if (hbIdle) { hbIdle = false; beat(); } }
+  ['pointerdown', 'keydown', 'scroll', 'touchstart'].forEach(function (ev) { window.addEventListener(ev, onAct, { passive: true, capture: true }); });
+  function privacySignal() { return navigator.globalPrivacyControl === true || navigator.doNotTrack === '1'; }
+  function presenceOn() { return !!presenceId && (!privacySignal() || started()); }
+  // Hostname of an external referrer ('' for none or for any yammbo.com page).
+  function refHost() {
+    try {
+      if (!document.referrer) return '';
+      var h = new URL(document.referrer).hostname.toLowerCase();
+      return (h === 'yammbo.com' || h.slice(-11) === '.yammbo.com') ? '' : h;
+    } catch (_) { return ''; }
+  }
+  async function beat() {
+    if (!presenceOn() || document.hidden || hbBusy) return;
+    if (Date.now() - lastAct > IDLE_MS) { hbIdle = true; return; }
+    hbBusy = true; hbLast = Date.now(); hbSent = true;
+    try {
+      var pg = pageInfo();
+      var body = { presenceId: presenceId, url: pg.url, title: pg.title, lang: lang, ref: refHost() };
+      if (started() && canLive()) body.sessionId = sessionId();
+      var res = await fetch(BASE + '/api/presence', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), keepalive: true });
+      if (res.ok) { var j = await res.json(); if (j && Array.isArray(j.messages)) onTeamMessages(j.messages); }
+    } catch (_) {}
+    finally { hbBusy = false; }
+    tryTeamTeaser(); // a team message the bubble could not show earlier (bubble hidden on this page)
+  }
+  setInterval(function () { if (!document.hidden) beat(); }, 30000);
+  setTimeout(beat, 800);
+  // Leaving: tell the server so the visitor stops being "online" right away (a beacon is a
+  // simple text/plain POST, no preflight). If it never arrives the row just expires.
+  window.addEventListener('pagehide', function () {
+    if (!hbSent || !presenceId) return;
+    try { navigator.sendBeacon(BASE + '/api/presence/leave', JSON.stringify({ presenceId: presenceId })); } catch (_) {}
+  });
+
+  // Teaser + messages the team wrote first ---------------------------------
+  // Both kinds of teaser share one card next to the bubble. Text only ever goes in through
+  // textContent. Rule teasers: once per page load, never again in this tab after the visitor
+  // closes one (sessionStorage flag only; memory when sessionStorage is unavailable).
+  var teaserEl = null, teaserState = null, teaserOffMem = false, ruleShown = false, pendingRule = null;
+  var teamMsgs = []; // [{id, text}] collected by the heartbeat, not yet opened by the visitor
+  function teaserOff() { if (teaserOffMem) return true; try { return sessionStorage.getItem(TEASER_OFF_KEY) === '1'; } catch (_) { return false; } }
+  function setTeaserOff() { teaserOffMem = true; try { sessionStorage.setItem(TEASER_OFF_KEY, '1'); } catch (_) {} }
+  // The site may hide the bubble (music in its player, web in /editor, /admin, /backstage):
+  // a teaser would then float alone, so nothing is shown (and no 'shown' event is sent).
+  function bubbleVisible() {
+    try {
+      var rs = getComputedStyle(root), bs = getComputedStyle(bubble);
+      if (rs.display === 'none' || rs.visibility === 'hidden' || bs.display === 'none' || bs.visibility === 'hidden') return false;
+      return bubble.getClientRects().length > 0; // no boxes when it or an ancestor is display:none
+    } catch (_) { return true; }
+  }
+  function hideTeaser() { if (teaserEl) { teaserEl.remove(); teaserEl = null; } teaserState = null; }
+  function showTeaser(kind, text, trig) {
+    if (isOpen() || !text || !bubbleVisible()) return false;
+    hideTeaser();
+    teaserState = { kind: kind, text: text, trig: trig || null };
+    teaserEl = el('<div class="yc-teaser' + (kind === 'team' ? ' yc-team' : '') + '" role="status"><button type="button" class="yc-teaser-body"><span class="yc-teaser-who"></span><span class="yc-teaser-text"></span></button>' +
+      '<button type="button" class="yc-teaser-x" aria-label="' + esc(t.teaserClose) + '" title="' + esc(t.teaserClose) + '">' + IC.close + '</button></div>');
+    teaserEl.querySelector('.yc-teaser-who').textContent = kind === 'team' ? t.teamLabel : t.title;
+    teaserEl.querySelector('.yc-teaser-text').textContent = text;
+    teaserEl.querySelector('.yc-teaser-body').addEventListener('click', openTeaser);
+    teaserEl.querySelector('.yc-teaser-x').addEventListener('click', dismissTeaser);
+    root.appendChild(teaserEl);
+    if (kind === 'rule' && trig) { ruleShown = true; trigEvent(trig.id, 'shown'); }
+    return true;
+  }
+  function dismissTeaser() {
+    var s = teaserState; hideTeaser();
+    if (!s) return;
+    if (s.kind === 'rule') setTeaserOff();
+    else teamMsgs = []; // declined: the visitor does not get a conversation
+  }
+  // Clicking the teaser opens the chat. A rule shows its text as the ASSISTANT's first
+  // line (kept in memory only until the visitor writes; it goes to the model as an
+  // assistant turn). A team message is accepted: the server turns it into a conversation.
+  function openTeaser() {
+    var s = teaserState; hideTeaser();
+    if (!s) return;
+    if (s.kind === 'rule') {
+      if (s.trig) trigEvent(s.trig.id, 'opened');
+      if (!chatLog.length) chatLog.push({ role: 'assistant', content: s.text, teaser: true });
+    }
+    open(); go('chat');
+  }
+  function tryTeamTeaser() {
+    if (!teamMsgs.length || isOpen() || (teaserState && teaserState.kind === 'team')) return;
+    showTeaser('team', teamMsgs[teamMsgs.length - 1].text);
+  }
+  function onTeamMessages(msgs) {
+    var fresh = [];
+    msgs.forEach(function (m) { if (m && typeof m.id === 'string' && typeof m.text === 'string' && m.text) fresh.push({ id: m.id, text: m.text.slice(0, 600) }); });
+    if (!fresh.length) return;
+    teamMsgs = teamMsgs.concat(fresh);
+    if (chatActive()) acceptTeam();
+    else if (!isOpen()) showTeaser('team', fresh[fresh.length - 1].text);
+    else setDot(true);
+  }
+  async function acceptTeam() {
+    if (!teamMsgs.length || acceptBusy || !presenceId) return;
+    acceptBusy = true;
+    try {
+      if (!canLive()) { try { localStorage.setItem(SESSION_KEY, newSessionId()); } catch (_) {} }
+      var res = await fetch(BASE + '/api/proactive/accept', { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ presenceId: presenceId, sessionId: sessionId() }) });
+      var j = await res.json().catch(function () { return {}; });
+      if (res.ok && j && Array.isArray(j.messages)) { teamMsgs = []; applyPoll(j); schedulePoll(); }
+      else {
+        // 404: nothing pending any more. Anything else (429, 5xx): keep it for a retry.
+        // Either way the visitor is told and can simply write.
+        if (res.status === 404) teamMsgs = [];
+        if (chatActive()) addNote(t.teamLost, true);
+      }
+    } catch (_) { if (chatActive()) addNote(t.teamLost, true); }
+    finally { acceptBusy = false; }
+  }
+  function trigEvent(id, type) {
+    try { fetch(BASE + '/api/triggers/' + encodeURIComponent(id) + '/event', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: type }), keepalive: true }).catch(function () {}); } catch (_) {}
+  }
+
+  // Proactive rules --------------------------------------------------------
+  // Same matcher as src/triggers.ts: pattern "host/path-prefix", host exact or "*", prefix
+  // on whole path segments, case-insensitive, a leading www. is ignored.
+  function ruleMatch(pat, loc) {
+    if (typeof pat !== 'string') return false;
+    var i = pat.indexOf('/'); if (i < 0) return false;
+    var pHost = pat.slice(0, i), pSegs = pat.slice(i).split('/').filter(Boolean);
+    var host = String(loc.hostname || '').toLowerCase(); if (host.indexOf('www.') === 0) host = host.slice(4);
+    if (pHost !== '*' && pHost !== host) return false;
+    var segs = String(loc.pathname || '').toLowerCase().split('/').filter(Boolean);
+    if (pSegs.length > segs.length) return false;
+    for (var k = 0; k < pSegs.length; k++) if (pSegs[k] !== segs[k]) return false;
+    return true;
+  }
+  function ruleText(tr) { return String(lang === 'en' ? (tr.en || tr.es) : (tr.es || tr.en) || '').slice(0, 240); }
+  // Chat closed, the assistant (not the team) in charge, nothing else on screen, tab visible.
+  function fireRule(tr) {
+    if (ruleShown || teaserOff() || isOpen() || teaserEl || liveMode !== 'bot') { pendingRule = null; return; }
+    if (document.hidden) { pendingRule = tr; return; }
+    pendingRule = null;
+    // Single-page sites: the route may have changed during the delay. Judge the CURRENT
+    // location and the bubble's visibility now; if either fails nothing is shown or counted.
+    if (!ruleMatch(tr.path, location)) return;
+    showTeaser('rule', ruleText(tr), tr);
+  }
+  (function initRules() {
+    if (teaserOff() || liveMode !== 'bot') return;
+    getJSON('/api/triggers').then(function (r) {
+      var list = r && r.triggers; if (!Array.isArray(list)) return;
+      for (var i = 0; i < list.length; i++) {
+        var tr = list[i];
+        if (!tr || typeof tr.id !== 'string' || !ruleMatch(tr.path, location) || !ruleText(tr)) continue;
+        var ms = Math.max(0, Math.min(300, parseInt(tr.delay, 10) || 0)) * 1000;
+        setTimeout(function () { fireRule(tr); }, ms);
+        return;
+      }
+    }).catch(function () {});
+  })();
 })();`;

@@ -3,7 +3,7 @@
 // Telegram (reusing notify.ts's sender) plus a Web Push to the panel devices.
 // Best-effort and silent on failure: callers run it in ctx.waitUntil.
 
-import { flagEmoji } from './device';
+import { clientSummary, flagEmoji } from './device';
 import { hit } from './limit';
 import { escapeHtml, sendTelegram, type NotifyEnv } from './notify';
 import { PRODUCT_NAMES, type Product } from './page';
@@ -43,7 +43,7 @@ function where(c: { country: string | null; city: string | null }): string {
 }
 
 function client(c: NewConversation): string {
-  return [c.device, c.os, c.browser].filter(Boolean).join(' · ') || '—';
+  return clientSummary(c) || '—';
 }
 
 // Telegram parse_mode is HTML (see notify.ts), so the visitor's text is escaped.

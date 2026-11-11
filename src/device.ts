@@ -37,6 +37,21 @@ export function parseUserAgent(ua: string | null | undefined): DeviceInfo {
   return { device, os, browser };
 }
 
+const DEVICE_LABEL: Record<string, string> = { mobile: 'Móvil', tablet: 'Tableta', desktop: 'Escritorio' };
+
+// Spanish label for the team-facing alerts (the stored value stays the English key).
+export function deviceLabel(device: string | null | undefined): string | null {
+  if (!device) return null;
+  return Object.prototype.hasOwnProperty.call(DEVICE_LABEL, device) ? DEVICE_LABEL[device] : device;
+}
+
+// "Móvil · iOS · Safari" for alerts. A missing or unknown ("Otro") OS or browser is
+// left out instead of printing "Otro · Otro".
+export function clientSummary(c: { device: string | null; os: string | null; browser: string | null }): string {
+  const known = (v: string | null) => (v && v !== 'Otro' ? v : null);
+  return [deviceLabel(c.device), known(c.os), known(c.browser)].filter(Boolean).join(' · ');
+}
+
 // ISO 3166-1 alpha-2 only ("XX"/"T1" style Cloudflare placeholders are kept
 // out of the letters-only check below and stored as null).
 export function cleanCountry(v: unknown): string | null {

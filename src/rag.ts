@@ -125,7 +125,7 @@ function prepareChunks(): PreparedChunk[] {
 
 // ─── Embedding ──────────────────────────────────────────────────────────────
 
-async function embed(env: RagEnv, texts: string[]): Promise<number[][]> {
+export async function embed(env: RagEnv, texts: string[]): Promise<number[][]> {
   const res = (await env.AI.run(EMBED_MODEL, { text: texts })) as { data: number[][] };
   if (!res || !Array.isArray(res.data)) throw new Error('embedding: unexpected AI response');
   return res.data;
@@ -237,4 +237,21 @@ export async function retrieve(
     });
   }
   return out;
+}
+
+// Closest KB doc to an embedding (the Huecos view asks "is there a doc near this
+// group of questions?"). Same language filter and orphan check as retrieve(), but
+// no score floor: the caller shows the similarity and lets the team judge.
+export async function kbNearest(
+  env: RagEnv,
+  vec: number[],
+  lang: Lang,
+): Promise<{ slug: string; title: string; score: number } | null> {
+  const res = await env.KB_INDEX.query(vec, { topK: 5, returnMetadata: 'all', filter: { lang } });
+  for (const m of res?.matches || []) {
+    const md = (m.metadata || {}) as Record<string, string>;
+    if (!md.slug || !LIVE_SLUGS.has(md.slug)) continue;
+    return { slug: md.slug, title: md.title || md.slug, score: typeof m.score === 'number' ? m.score : 0 };
+  }
+  return null;
 }

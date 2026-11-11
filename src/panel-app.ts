@@ -31,6 +31,9 @@ export const PANEL_APP_JS = 'var PRODUCTS = ' + JSON.stringify(PRODUCT_NAMES) + 
     bell: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>',
     out: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/></svg>',
     gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
+    eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>',
+    spark: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.7 1.8L21.5 17.5l-1.8.7L19 20l-.7-1.8-1.8-.7 1.8-.7z"/></svg>',
+    send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4z"/></svg>',
     back: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>'
   };
 
@@ -160,10 +163,10 @@ export const PANEL_APP_JS = 'var PRODUCTS = ' + JSON.stringify(PRODUCT_NAMES) + 
   // Shell -------------------------------------------------------------------------
   var TABS = [
     { id: 'home', href: '#/', label: 'Inicio', ic: IC.home },
+    { id: 'live', href: '#/live', label: 'En línea', ic: IC.eye },
     { id: 'chats', href: '#/c', label: 'Chats', ic: IC.chat },
     { id: 'leads', href: '#/leads', label: 'Contactos', ic: IC.users },
-    { id: 'unanswered', href: '#/unanswered', label: 'Sin respuesta', ic: IC.help },
-    { id: 'settings', href: '#/settings', label: 'Ajustes', ic: IC.gear }
+    { id: 'unanswered', href: '#/unanswered', label: 'Sin respuesta', ic: IC.help }
   ];
   var bellBtn = null;
   function shell(active, content) {
@@ -175,7 +178,9 @@ export const PANEL_APP_JS = 'var PRODUCTS = ' + JSON.stringify(PRODUCT_NAMES) + 
       return a;
     }));
     var top = h('header', { class: 'top' },
-      h('span', { class: 'brand' }, 'Yammbo Chat'), nav, h('span', { class: 'spacer' }), bellBtn,
+      h('span', { class: 'brand' }, 'Yammbo Chat'), nav, h('span', { class: 'spacer' }),
+      h('a', { class: 'iconbtn' + (active === 'settings' ? ' current' : ''), href: '#/settings', title: 'Ajustes', 'aria-label': 'Ajustes', 'aria-current': active === 'settings' ? 'page' : null }, icon(IC.gear)),
+      bellBtn,
       h('button', { class: 'iconbtn', onclick: logout, title: 'Salir', 'aria-label': 'Salir' }, icon(IC.out)));
     var main = h('main', null, content);
     mount([top, main]);
@@ -250,7 +255,7 @@ export const PANEL_APP_JS = 'var PRODUCTS = ' + JSON.stringify(PRODUCT_NAMES) + 
     shell('home', content);
     api(P + '/stats' + qs({ days: statsRange, tz: TZ })).then(function (s) {
       if (tok !== navToken) return;
-      body.replaceChildren(waitingBanner(s.waiting), renderStats(s));
+      body.replaceChildren(waitingBanner(s.waiting), onlineCard(s.online), renderStats(s));
     }).catch(function (e) { if (tok === navToken && !onError(e)) body.replaceChildren(failure()); });
   }
   function waitingBanner(n) {
@@ -258,6 +263,12 @@ export const PANEL_APP_JS = 'var PRODUCTS = ' + JSON.stringify(PRODUCT_NAMES) + 
     return h('div', { class: 'card banner alert' },
       h('p', null, h('strong', null, n === 1 ? '1 conversación espera a una persona' : n + ' conversaciones esperan a una persona')),
       h('a', { class: 'btn', href: '#/c', onclick: function () { filters.mode = 'waiting'; filters.status = ''; } }, 'Ver'));
+  }
+  function onlineCard(n) {
+    if (typeof n !== 'number') return h('span');
+    return h('div', { class: 'card banner' },
+      h('p', null, h('span', { class: 'live-dot', 'aria-hidden': 'true' }), h('strong', null, n === 1 ? '1 visitante en línea' : n + ' visitantes en línea')),
+      h('a', { class: 'btn ghost', href: '#/live' }, 'Ver'));
   }
   function kpi(n, label) { return h('div', { class: 'kpi' }, h('b', null, String(n)), h('span', null, label)); }
   function vbars(values, labels) {
@@ -575,14 +586,21 @@ export const PANEL_APP_JS = 'var PRODUCTS = ' + JSON.stringify(PRODUCT_NAMES) + 
     }
 
     // Composer ----------------------------------------------------------------------------------------
-    var ta = h('textarea', { class: 'inp', rows: '3', maxlength: '2000', placeholder: 'Escribe una respuesta… ("/" abre las respuestas rápidas)', 'aria-label': 'Respuesta al visitante', 'aria-autocomplete': 'list', 'aria-controls': 'picker-' + tok });
-    var hint = h('div', { class: 'small muted' });
+    var ta = h('textarea', { class: 'inp', rows: '1', maxlength: '2000', placeholder: 'Escribe una respuesta…', 'aria-label': 'Respuesta al visitante («/» abre las respuestas rápidas)', 'aria-autocomplete': 'list', 'aria-controls': 'picker-' + tok });
+    var hint = h('div', { class: 'small muted composer-hint' });
     var aiNote = h('div', { class: 'small muted', hidden: true }, 'Borrador generado por IA: revísalo y edítalo antes de enviar.');
     var picker = h('ul', { class: 'picker', id: 'picker-' + tok, role: 'listbox', 'aria-label': 'Respuestas rápidas', hidden: true });
-    var sendBtn = h('button', { class: 'btn', type: 'button', onclick: send }, 'Enviar');
-    var draftBtn = h('button', { class: 'btn ghost', type: 'button', onclick: suggest }, 'Sugerir respuesta');
-    var composer = h('div', { class: 'composer' }, picker, hint, ta, aiNote,
-      h('div', { class: 'row composer-actions' }, draftBtn, h('span', { class: 'small muted kbd' }, 'Ctrl/Cmd + Enter para enviar'), h('span', { class: 'spacer' }), sendBtn), composerErr);
+    var sendBtn = h('button', { class: 'ibtn primary', type: 'button', onclick: send, title: 'Enviar (Ctrl/Cmd + Enter)', 'aria-label': 'Enviar' }, icon(IC.send));
+    var draftBtn = h('button', { class: 'ibtn', type: 'button', onclick: suggest, title: 'Sugerir respuesta con IA' }, icon(IC.spark), h('span', { class: 'vh' }, 'Sugerir respuesta con IA'));
+    var composer = h('div', { class: 'composer' }, picker, aiNote, h('div', { class: 'composer-row' }, ta, draftBtn, sendBtn), composerErr);
+    // One line that grows with the text, up to about six lines (then it scrolls).
+    function grow() {
+      ta.style.height = 'auto';
+      var sh = ta.scrollHeight;
+      if (!sh) { ta.style.height = ''; return; }
+      ta.style.height = Math.max(38, Math.min(sh + 2, 144)) + 'px';
+    }
+    ta.addEventListener('input', grow);
 
     // Short (legacy) session ids cannot go live: the visitor's widget would never see the answer.
     if (conv.legacy) composer = h('div', { class: 'composer' }, h('div', { class: 'small muted', role: 'note' }, 'Esta conversación es de una versión antigua del chat: no se puede responder en vivo.'));
@@ -592,7 +610,7 @@ export const PANEL_APP_JS = 'var PRODUCTS = ' + JSON.stringify(PRODUCT_NAMES) + 
       if (!text) return;
       sendBtn.disabled = true; composerErr.hidden = true;
       api(P + '/conversations/' + encodeURIComponent(id) + '/reply', { method: 'POST', body: { text: text } }).then(function (r) {
-        sendBtn.disabled = false; ta.value = ''; aiNote.hidden = true; closePicker();
+        sendBtn.disabled = false; ta.value = ''; grow(); aiNote.hidden = true; closePicker();
         conv.mode = r.mode; conv.status = r.status;
         r.messages.forEach(addMessage);
         paintHead();
@@ -606,16 +624,16 @@ export const PANEL_APP_JS = 'var PRODUCTS = ' + JSON.stringify(PRODUCT_NAMES) + 
       });
     }
     function suggest() {
-      draftBtn.disabled = true; draftBtn.textContent = 'Pensando…'; composerErr.hidden = true;
+      draftBtn.disabled = true; draftBtn.setAttribute('aria-busy', 'true'); draftBtn.title = 'Pensando…'; composerErr.hidden = true;
       api(P + '/conversations/' + encodeURIComponent(id) + '/draft', { method: 'POST', body: {} }).then(function (r) {
         ta.value = ta.value.trim() ? ta.value.replace(/\s+$/, '') + '\n\n' + r.text : r.text;
-        ta.value = ta.value.slice(0, 2000);
+        ta.value = ta.value.slice(0, 2000); grow();
         aiNote.hidden = false; ta.focus();
       }).catch(function (e) {
         if (onError(e)) return;
         composerErr.hidden = false;
         composerErr.textContent = e.status === 429 ? 'Se alcanzó el límite de borradores por hora.' : 'No se pudo generar el borrador. Inténtalo de nuevo.';
-      }).then(function () { draftBtn.disabled = false; draftBtn.textContent = 'Sugerir respuesta'; });
+      }).then(function () { draftBtn.disabled = false; draftBtn.removeAttribute('aria-busy'); draftBtn.title = 'Sugerir respuesta con IA'; });
     }
 
     // "/" picker: filterable list of canned replies, keyboard driven.
@@ -663,7 +681,7 @@ export const PANEL_APP_JS = 'var PRODUCTS = ' + JSON.stringify(PRODUCT_NAMES) + 
       var end = ta.selectionStart;
       ta.value = (ta.value.slice(0, token.start) + text + ta.value.slice(end)).slice(0, 2000);
       var caret = Math.min(ta.value.length, token.start + text.length);
-      ta.setSelectionRange(caret, caret);
+      ta.setSelectionRange(caret, caret); grow();
       closePicker(); ta.focus();
     }
     ta.addEventListener('input', updatePicker);
@@ -735,7 +753,8 @@ export const PANEL_APP_JS = 'var PRODUCTS = ' + JSON.stringify(PRODUCT_NAMES) + 
     first.messages.forEach(addMessage);
     paintHead(); paintTags(first.tags); paintCsat(); paintLead(); paintNotes(first.notes); paintJourney(first.pageViews);
     root.appendChild(title); root.appendChild(meta); root.appendChild(controls); root.appendChild(tagBox);
-    root.appendChild(msgs); root.appendChild(composer); root.appendChild(csatBox); root.appendChild(leadBox);
+    hint.hidden = !!conv.legacy;
+    root.appendChild(msgs); root.appendChild(hint); root.appendChild(composer); root.appendChild(csatBox); root.appendChild(leadBox);
     root.appendChild(h('h2', null, 'Notas internas'));
     root.appendChild(h('div', { class: 'card notes' }, notesList, noteInput,
       h('div', { class: 'row mt' }, h('button', { class: 'btn ghost sm', type: 'button', onclick: addNote }, 'Añadir nota')), noteErr));
@@ -749,6 +768,116 @@ export const PANEL_APP_JS = 'var PRODUCTS = ' + JSON.stringify(PRODUCT_NAMES) + 
         if (first.messages.length) composer.scrollIntoView({ block: 'end' });
       }
     };
+  }
+
+  // Live: visitors online now --------------------------------------------------------------------------------
+  function fmtDur(ms) {
+    var s = Math.max(0, Math.floor(ms / 1000));
+    if (s < 60) return s + ' s';
+    var m = Math.floor(s / 60);
+    if (m < 60) return m + ' min';
+    return Math.floor(m / 60) + ' h ' + (m % 60) + ' min';
+  }
+  var SEND_ERR = {
+    410: 'El visitante ya se fue.',
+    404: 'El visitante ya no está en línea.',
+    409: 'Ya hay demasiados mensajes pendientes para este visitante.',
+    429: 'Se alcanzó el límite de mensajes por hora.',
+    400: 'Escribe un mensaje (máximo 600 caracteres).'
+  };
+  function visitorRow(id) {
+    var placeEl = h('span', { class: 'vplace' });
+    var badges = h('span', { class: 'row' });
+    var pageEl = h('div', { class: 'vpage' });
+    var metaEl = h('div', { class: 'vmeta' });
+    var tagsEl = h('div', { class: 'vtags' });
+    var composerBox = h('div', { class: 'vcomposer', hidden: true });
+    var ta = h('textarea', { class: 'inp', rows: '3', maxlength: '600', placeholder: 'Escribe el primer mensaje…', 'aria-label': 'Mensaje para el visitante' });
+    var status = h('div', { class: 'small muted', role: 'status' });
+    var sendBtn = h('button', { class: 'btn sm', type: 'button' }, 'Enviar');
+    var cancelBtn = h('button', { class: 'btn ghost sm', type: 'button' }, 'Cancelar');
+    composerBox.appendChild(h('div', { class: 'small muted' }, 'El visitante lo verá junto a la burbuja del chat. Solo se crea una conversación si lo abre.'));
+    composerBox.appendChild(ta);
+    composerBox.appendChild(h('div', { class: 'row' }, sendBtn, cancelBtn));
+    composerBox.appendChild(status);
+    var openBtn = h('button', { class: 'btn ghost sm', type: 'button', 'aria-expanded': 'false' }, 'Enviar mensaje');
+    function setOpen(on) {
+      composerBox.hidden = !on;
+      openBtn.setAttribute('aria-expanded', on ? 'true' : 'false');
+      if (on) ta.focus();
+    }
+    openBtn.addEventListener('click', function () { setOpen(composerBox.hidden); });
+    cancelBtn.addEventListener('click', function () { setOpen(false); });
+    sendBtn.addEventListener('click', function () {
+      var text = ta.value.trim();
+      if (!text) { status.textContent = SEND_ERR[400]; return; }
+      sendBtn.disabled = true; status.textContent = '';
+      api(P + '/presence/' + encodeURIComponent(id) + '/message', { method: 'POST', body: { text: text } }).then(function () {
+        ta.value = ''; setOpen(false);
+        status.textContent = '';
+        sentNote.textContent = 'Mensaje enviado: le aparecerá en unos 30 s.';
+      }).catch(function (e) {
+        if (onError(e)) return;
+        status.textContent = SEND_ERR[e.status] || 'No se pudo enviar. Inténtalo de nuevo.';
+      }).then(function () { sendBtn.disabled = false; });
+    });
+    var sentNote = h('div', { class: 'small muted', role: 'status' });
+    var node = h('div', { class: 'visitor' }, h('div', { class: 'vhead' }, placeEl, badges), pageEl, metaEl, tagsEl, sentNote, composerBox);
+    return {
+      node: node,
+      update: function (v, now) {
+        placeEl.textContent = place(v) || 'Ubicación desconocida';
+        var bs = [];
+        if (v.device) bs.push(badge(DEVICES[v.device] || v.device));
+        var sw = [v.os, v.browser].filter(function (x) { return x && x !== 'Otro'; }).join(' · ');
+        if (sw) bs.push(badge(sw, 'outline'));
+        if (v.lang) bs.push(badge(String(v.lang).toUpperCase(), 'outline'));
+        badges.replaceChildren.apply(badges, bs);
+        pageEl.replaceChildren.apply(pageEl, v.title ? [h('b', null, v.title), ' · ', pathOf(v.url)] : [pathOf(v.url)]);
+        metaEl.replaceChildren(
+          h('span', null, 'En la página desde hace ' + fmtDur(now - v.firstSeen)),
+          h('span', null, 'Origen: ' + (v.referrerHost || 'directo')));
+        var t = [];
+        if (v.sessionId && /^[A-Za-z0-9_-]{8,64}$/.test(v.sessionId) && v.convMode) t.push(h('a', { class: 'badge accent', href: '#/c/' + encodeURIComponent(v.sessionId) }, 'Ver conversación'));
+        if (v.pending) t.push(badge('Mensaje pendiente de entrega'));
+        t.push(openBtn);
+        tagsEl.replaceChildren.apply(tagsEl, t);
+      }
+    };
+  }
+  function viewLive() {
+    var tok = ++navToken;
+    var rows = {};
+    var list = h('div', null, loading());
+    var count = h('p', { class: 'small', 'aria-live': 'polite' });
+    shell('live', h('div', null, h('h1', null, 'En línea'),
+      h('p', { class: 'muted small' }, 'Visitantes activos en los últimos 90 segundos; se actualiza solo cada 10 s. Solo se ve el país y la ciudad aproximados, el dispositivo, la página y de dónde llegó; no se guarda nada en su navegador (el id vive en la memoria de la pestaña: en sitios de una sola página sigue entre secciones y al cerrar o recargar se genera otro) y la fila se borra como máximo unos 30 minutos después de la última señal. El navegador deja de avisar tras 30 minutos sin interacción. Con «Global Privacy Control» o «no rastrear» no se envía presencia, salvo que ya haya una conversación abierta.'),
+      count, list));
+    var first = true;
+    function paint(r) {
+      var items = r.items || [];
+      if (first) { list.replaceChildren(); first = false; }
+      count.textContent = items.length === 1 ? '1 visitante en línea' : items.length + ' visitantes en línea';
+      var seen = {};
+      items.forEach(function (v) { seen[v.id] = true; });
+      Object.keys(rows).forEach(function (k) { if (!seen[k]) { rows[k].node.remove(); delete rows[k]; } });
+      var ref = list.firstChild;
+      items.forEach(function (v) {
+        var row = rows[v.id] || (rows[v.id] = visitorRow(v.id));
+        row.update(v, r.now || Date.now());
+        // Keep nodes in place when the order did not change, so an open composer keeps its focus.
+        if (row.node === ref) ref = ref.nextSibling; else list.insertBefore(row.node, ref);
+      });
+      var emptyEl = list.querySelector('.empty');
+      if (!items.length && !emptyEl) list.appendChild(h('div', { class: 'empty' }, 'Nadie en línea ahora mismo.'));
+      else if (items.length && emptyEl) emptyEl.remove();
+    }
+    function load() {
+      return api(P + '/presence').then(function (r) { if (tok === navToken) paint(r); })
+        .catch(function (e) { if (tok === navToken && !onError(e) && first) list.replaceChildren(failure()); });
+    }
+    load();
+    startPolling(load, 10000);
   }
 
   // Settings: canned replies -----------------------------------------------------------------------------------------
@@ -809,8 +938,109 @@ export const PANEL_APP_JS = 'var PRODUCTS = ' + JSON.stringify(PRODUCT_NAMES) + 
       list, formTitle,
       h('div', { class: 'card form' }, h('label', { class: 'small muted' }, 'Atajo (minúsculas, números y guiones)'), h('div', { class: 'scwrap' }, h('span', { class: 'slash', 'aria-hidden': 'true' }, '/'), sc),
         h('label', { class: 'small muted' }, 'Título'), ti, h('label', { class: 'small muted' }, 'Texto'), bo,
-        h('div', { class: 'row' }, saveBtn, cancelBtn), err)));
+        h('div', { class: 'row' }, saveBtn, cancelBtn), err),
+      rulesSection()));
     refresh();
+  }
+
+  // Settings: proactive rules -------------------------------------------------------------------------------
+  var RULE_ERR = {
+    invalid_name: 'Pon un nombre (máx. 80 caracteres).',
+    invalid_pattern: 'Patrón no válido. Usa dominio/ruta, por ejemplo yammbo.com/pos o */precios.',
+    invalid_delay: 'La espera debe ser un número entero entre 0 y 300 segundos.',
+    invalid_message: 'Escribe el mensaje al menos en un idioma (máx. 240 caracteres).',
+    too_many_triggers: 'Ya hay 50 reglas, el máximo. Elimina alguna.'
+  };
+  function rulesSection() {
+    var box = h('div', null, loading());
+    var editing = null;
+    var nm = h('input', { class: 'inp', type: 'text', maxlength: '80', placeholder: 'Nombre interno (p. ej. Precios de POS)', 'aria-label': 'Nombre de la regla', autocomplete: 'off' });
+    var pt = h('input', { class: 'inp', type: 'text', maxlength: '120', placeholder: 'yammbo.com/pos', 'aria-label': 'Patrón de página', autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false' });
+    var dl = h('input', { class: 'inp', type: 'number', min: '0', max: '300', step: '1', value: '10', inputmode: 'numeric', 'aria-label': 'Segundos de espera' });
+    var es = h('textarea', { class: 'inp', rows: '3', maxlength: '240', placeholder: 'Mensaje en español', 'aria-label': 'Mensaje en español' });
+    var en = h('textarea', { class: 'inp', rows: '3', maxlength: '240', placeholder: 'Message in English', 'aria-label': 'Message in English' });
+    var onChk = h('input', { type: 'checkbox', checked: true, id: 'rule-on' });
+    var err = h('div', { class: 'err', role: 'alert', hidden: true });
+    var formTitle = h('h3', { class: 'small formtitle' }, 'Nueva regla');
+    var saveBtn = h('button', { class: 'btn', type: 'button' }, 'Guardar regla');
+    var cancelBtn = h('button', { class: 'btn ghost', type: 'button', hidden: true }, 'Cancelar edición');
+    // Preview: the same card the widget shows (text only, via textContent).
+    var pvLang = 'es';
+    var pvText = h('span');
+    var pvEs = h('button', { class: 'chip on', type: 'button', 'aria-pressed': 'true' }, 'ES');
+    var pvEn = h('button', { class: 'chip', type: 'button', 'aria-pressed': 'false' }, 'EN');
+    function paintPv() {
+      var txt = pvLang === 'en' ? (en.value || es.value) : (es.value || en.value);
+      pvText.textContent = txt || 'Aquí verás el mensaje.';
+      pvEs.className = 'chip' + (pvLang === 'es' ? ' on' : ''); pvEs.setAttribute('aria-pressed', pvLang === 'es' ? 'true' : 'false');
+      pvEn.className = 'chip' + (pvLang === 'en' ? ' on' : ''); pvEn.setAttribute('aria-pressed', pvLang === 'en' ? 'true' : 'false');
+    }
+    pvEs.addEventListener('click', function () { pvLang = 'es'; paintPv(); });
+    pvEn.addEventListener('click', function () { pvLang = 'en'; paintPv(); });
+    es.addEventListener('input', paintPv); en.addEventListener('input', paintPv);
+    function reset() {
+      editing = null; nm.value = ''; pt.value = ''; dl.value = '10'; es.value = ''; en.value = ''; onChk.checked = true;
+      err.hidden = true; cancelBtn.hidden = true; formTitle.textContent = 'Nueva regla'; paintPv();
+    }
+    cancelBtn.addEventListener('click', reset);
+    function refresh() {
+      return api(P + '/triggers').then(function (r) {
+        var items = r.items || [];
+        box.replaceChildren();
+        if (!items.length) box.appendChild(h('div', { class: 'empty' }, 'Aún no hay reglas. El asistente no abre conversaciones por su cuenta.'));
+        items.forEach(function (t) {
+          var rate = t.shown ? Math.round(t.opened * 1000 / t.shown) / 10 + ' %' : '—';
+          var del = h('button', { class: 'btn ghost sm', type: 'button' }, 'Eliminar');
+          var armed = false;
+          del.addEventListener('click', function () {
+            if (!armed) { armed = true; del.textContent = '¿Seguro?'; setTimeout(function () { armed = false; del.textContent = 'Eliminar'; }, 3000); return; }
+            del.disabled = true;
+            api(P + '/triggers/' + encodeURIComponent(t.id), { method: 'DELETE' }).then(function () { if (editing === t.id) reset(); return refresh(); }).catch(function (e) { del.disabled = false; onError(e); });
+          });
+          var tog = h('button', { class: 'btn ghost sm', type: 'button', 'aria-pressed': t.enabled ? 'true' : 'false' }, t.enabled ? 'Desactivar' : 'Activar');
+          tog.addEventListener('click', function () {
+            tog.disabled = true;
+            api(P + '/triggers/' + encodeURIComponent(t.id), { method: 'POST', body: { enabled: !t.enabled } }).then(refresh).catch(function (e) { tog.disabled = false; onError(e); });
+          });
+          box.appendChild(h('div', { class: 'rule' + (t.enabled ? '' : ' off') },
+            h('div', { class: 'rhead' }, h('span', { class: 'rname' }, t.name), badge(t.enabled ? 'Activa' : 'Desactivada', t.enabled ? 'accent' : ''), badge(t.delay + ' s', 'outline')),
+            h('div', { class: 'small' }, h('code', { class: 'sc' }, t.pattern)),
+            t.es ? h('div', { class: 'rtxt' }, 'ES: ' + t.es) : null,
+            t.en ? h('div', { class: 'rtxt' }, 'EN: ' + t.en) : null,
+            h('div', { class: 'rstats' }, 'Mostrada ' + t.shown + ' · abierta ' + t.opened + ' · tasa de apertura ' + rate),
+            h('div', { class: 'row' }, tog,
+              h('button', { class: 'btn ghost sm', type: 'button', onclick: function () {
+                editing = t.id; nm.value = t.name; pt.value = t.pattern; dl.value = String(t.delay); es.value = t.es; en.value = t.en; onChk.checked = t.enabled;
+                err.hidden = true; cancelBtn.hidden = false; formTitle.textContent = 'Editar regla'; paintPv(); nm.focus();
+              } }, 'Editar'), del)));
+        });
+      }).catch(function (e) { if (!onError(e)) box.replaceChildren(failure()); });
+    }
+    saveBtn.addEventListener('click', function () {
+      saveBtn.disabled = true; err.hidden = true;
+      var payload = { name: nm.value, pattern: pt.value, delay: dl.value === '' ? '' : Number(dl.value), es: es.value, en: en.value, enabled: onChk.checked };
+      api(P + '/triggers' + (editing ? '/' + encodeURIComponent(editing) : ''), { method: 'POST', body: payload }).then(function () { reset(); return refresh(); })
+        .catch(function (e) { if (onError(e)) return; err.hidden = false; err.textContent = RULE_ERR[e.message] || 'No se pudo guardar. Inténtalo de nuevo.'; })
+        .then(function () { saveBtn.disabled = false; });
+    });
+    paintPv();
+    refresh();
+    return h('div', null,
+      h('h2', null, 'Mensajes proactivos'),
+      h('p', { class: 'muted small' }, 'Muestran un mensaje junto a la burbuja del chat tras unos segundos en ciertas páginas. Solo se muestra una vez por visita, no aparece si el chat está abierto o ya habla una persona, y si el visitante lo cierra no vuelve en esa pestaña. Al abrirlo, el mensaje aparece como mensaje del asistente.'),
+      h('details', { class: 'help' }, h('summary', null, 'Cómo escribir el patrón de página'),
+        h('p', null, 'Formato: ', h('code', null, 'dominio/ruta'), '. El dominio es ', h('code', null, 'yammbo.com'), ', cualquier subdominio de yammbo.com o ', h('code', null, '*'), ' (cualquiera). Si lo omites, vale cualquiera. La ruta coincide por segmentos completos y sin distinguir mayúsculas: ', h('code', null, '/pos'), ' coincide con /pos, /pos/ y /pos/precios, pero no con /posts. Sin ruta, vale toda la web. No hay otros comodines ni expresiones regulares.'),
+        h('p', null, h('code', null, 'yammbo.com/pos'), ' la sección POS · ', h('code', null, '*/precios'), ' /precios en cualquier dominio de Yammbo · ', h('code', null, 'web.yammbo.com'), ' todo web.yammbo.com'),
+        h('p', null, 'Si varias reglas coinciden, se usa la primera creada.')),
+      box, formTitle,
+      h('div', { class: 'card form' },
+        h('label', { class: 'small muted' }, 'Nombre'), nm,
+        h('div', { class: 'fgrid two' }, h('div', null, h('label', { class: 'small muted' }, 'Página (patrón)'), pt), h('div', null, h('label', { class: 'small muted' }, 'Mostrar tras (segundos, 0 a 300)'), dl)),
+        h('div', { class: 'fgrid two' }, h('div', null, h('label', { class: 'small muted' }, 'Mensaje en español'), es), h('div', null, h('label', { class: 'small muted' }, 'Message in English'), en)),
+        h('div', { class: 'row' }, onChk, h('label', { class: 'small', for: 'rule-on' }, 'Regla activa')),
+        h('div', { class: 'pv', 'aria-label': 'Vista previa' }, h('div', { class: 'row' }, h('span', { class: 'small muted' }, 'Vista previa'), pvEs, pvEn),
+          h('div', { class: 'pv-card' }, h('b', null, 'Yammbo'), pvText)),
+        h('div', { class: 'row' }, saveBtn, cancelBtn), err));
   }
 
   // Leads --------------------------------------------------------------------------------------
@@ -848,12 +1078,111 @@ export const PANEL_APP_JS = 'var PRODUCTS = ' + JSON.stringify(PRODUCT_NAMES) + 
       h('div', { class: 'tags' }, tags, l.sessionId ? h('a', { class: 'badge accent', href: '#/c/' + encodeURIComponent(l.sessionId) }, 'Ver conversación') : null));
   }
 
-  // Unanswered ------------------------------------------------------------------------------------
+  // Unanswered: list + Help Center gaps ------------------------------------------------------------------------
+  var gapThreshold = 0.82;
+  var THRESHOLDS = [[0.7, 'Amplia (0,70)'], [0.76, 'Media-amplia (0,76)'], [0.82, 'Normal (0,82)'], [0.88, 'Estricta (0,88)'], [0.92, 'Muy estricta (0,92)']];
+  var WHY_LABEL = { down: 'Pulgar abajo', handoff: 'Pasó a persona', nokb: 'Sin artículos', person: 'Pidió una persona' };
+  var DRAFT_WARN = {
+    no_frontmatter: 'El borrador no empieza con frontmatter.',
+    missing_title: 'Falta title.', missing_description: 'Falta description.', missing_category: 'Falta category.',
+    invalid_order: 'order no es un número.'
+  };
+  function subTabs(active) {
+    return h('div', { class: 'subtabs', role: 'tablist', 'aria-label': 'Vista' },
+      h('a', { class: 'chip' + (active === 'list' ? ' on' : ''), href: '#/unanswered', role: 'tab', 'aria-selected': active === 'list' ? 'true' : 'false' }, 'Lista'),
+      h('a', { class: 'chip' + (active === 'gaps' ? ' on' : ''), href: '#/unanswered/gaps', role: 'tab', 'aria-selected': active === 'gaps' ? 'true' : 'false' }, 'Huecos'));
+  }
+  function copyText(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
+    return new Promise(function (resolve, reject) {
+      var t = h('textarea', { 'aria-hidden': 'true', class: 'vh' });
+      t.value = text; document.body.appendChild(t); t.select();
+      var ok = false; try { ok = document.execCommand('copy'); } catch (_) {}
+      t.remove(); ok ? resolve() : reject(new Error('copy'));
+    });
+  }
+  function draftViewer(d) {
+    var copyBtn = h('button', { class: 'btn ghost sm', type: 'button' }, 'Copiar');
+    copyBtn.addEventListener('click', function () {
+      copyText(d.mdx).then(function () { copyBtn.textContent = 'Copiado'; }).catch(function () { copyBtn.textContent = 'No se pudo copiar'; })
+        .then(function () { setTimeout(function () { copyBtn.textContent = 'Copiar'; }, 2000); });
+    });
+    var dl = h('button', { class: 'btn ghost sm', type: 'button' }, 'Descargar .mdx');
+    dl.addEventListener('click', function () {
+      var url = URL.createObjectURL(new Blob([d.mdx], { type: 'text/markdown;charset=utf-8' }));
+      var a = h('a', { href: url, download: d.filename || 'borrador.mdx' });
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    });
+    var warns = (d.warnings || []).map(function (w) { return DRAFT_WARN[w] || w; });
+    return h('div', { class: 'draft' },
+      h('div', { class: 'dbar' }, h('strong', { class: 'small' }, d.filename || 'borrador.mdx'),
+        d.todos ? badge(d.todos + (d.todos === 1 ? ' pendiente (TODO)' : ' pendientes (TODO)'), 'warn') : badge('Sin TODO', 'outline'),
+        h('span', { class: 'spacer' }), copyBtn, dl),
+      warns.length ? h('div', { class: 'err draft-warn', role: 'alert' }, warns.join(' ')) : null,
+      h('div', { class: 'small muted draft-note' }, 'Borrador generado por IA: revisa los datos, resuelve los TODO y publícalo tú en help.yammbo.com. No se publica nada solo.'),
+      h('pre', { tabindex: '0', 'aria-label': 'Borrador del artículo' }, d.mdx));
+  }
+  function gapCard(g) {
+    var out = h('div');
+    var btn = h('button', { class: 'btn sm', type: 'button' }, 'Proponer artículo');
+    var msg = h('div', { class: 'err', role: 'alert', hidden: true });
+    btn.addEventListener('click', function () {
+      btn.disabled = true; msg.hidden = true; btn.textContent = 'Redactando…';
+      api(P + '/gaps/draft', { method: 'POST', body: { questions: g.questions, product: g.product, lang: g.lang } }).then(function (d) {
+        out.replaceChildren(draftViewer(d));
+      }).catch(function (e) {
+        if (onError(e)) return;
+        msg.hidden = false;
+        msg.textContent = e.status === 429 ? 'Se alcanzó el límite de 20 borradores por hora.' : 'No se pudo generar el borrador. Inténtalo de nuevo.';
+      }).then(function () { btn.disabled = false; btn.textContent = 'Proponer artículo'; });
+    });
+    var tags = [badge(g.size + (g.size === 1 ? ' pregunta' : ' preguntas'), 'accent')];
+    if (g.product) tags.push(badge(productName(g.product), 'outline'));
+    tags.push(badge(String(g.lang).toUpperCase(), 'outline'));
+    Object.keys(WHY_LABEL).forEach(function (k) { if (g.reasons && g.reasons[k]) tags.push(badge(WHY_LABEL[k] + ' · ' + g.reasons[k])); });
+    return h('div', { class: 'card gap' },
+      h('div', { class: 'ghead' }, tags),
+      h('ul', null, (g.examples || []).map(function (q) { return h('li', null, q); })),
+      h('div', { class: 'gkb' }, g.kb
+        ? 'Artículo más cercano: ' + (g.kb.title || g.kb.slug) + ' (' + g.kb.slug + ') · similitud ' + Math.round(g.kb.score * 100) + ' %'
+        : 'No hay ningún artículo cercano en la ayuda.'),
+      h('div', { class: 'row mt' }, btn), msg, out);
+  }
+  function viewGaps() {
+    var tok = ++navToken;
+    var body = h('div', null, loading());
+    var sel = h('select', { class: 'inp autow', 'aria-label': 'Similitud para agrupar' }, THRESHOLDS.map(function (t) { return h('option', { value: String(t[0]), selected: t[0] === gapThreshold }, t[1]); }));
+    var recalc = h('button', { class: 'btn ghost sm', type: 'button' }, 'Recalcular');
+    var note = h('span', { class: 'small muted', role: 'status' });
+    sel.addEventListener('change', function () { gapThreshold = parseFloat(sel.value) || 0.82; load(false); });
+    recalc.addEventListener('click', function () { load(true); });
+    shell('unanswered', h('div', null, h('h1', null, 'Sin respuesta'), subTabs('gaps'),
+      h('p', { class: 'muted small' }, 'Preguntas de los últimos 30 días con pulgar abajo, que pasaron a una persona, sin artículos relacionados o que pedían una persona, agrupadas por parecido. Las más repetidas son los huecos de la ayuda.'),
+      h('div', { class: 'row' }, sel, recalc, note), body));
+    function load(refresh) {
+      recalc.disabled = true; body.replaceChildren(loading());
+      api(P + '/gaps' + qs({ threshold: gapThreshold, refresh: refresh ? '1' : '' })).then(function (r) {
+        if (tok !== navToken) return;
+        note.textContent = 'Calculado ' + (ago(r.generatedAt) === 'ahora' ? 'ahora' : 'hace ' + ago(r.generatedAt)) + (r.total ? ' · ' + r.total + ' preguntas' : '');
+        if (!r.groups.length) { body.replaceChildren(h('div', { class: 'empty' }, 'No hay preguntas sin resolver en los últimos 30 días.')); return; }
+        var nodes = r.groups.map(gapCard);
+        if (r.omitted) nodes.push(h('p', { class: 'small muted' }, r.omitted + ' grupos más pequeños no se muestran.'));
+        body.replaceChildren.apply(body, nodes);
+      }).catch(function (e) {
+        if (tok !== navToken || onError(e)) return;
+        body.replaceChildren(failure(e.status === 429 ? 'Se alcanzó el límite de cálculos por hora. Prueba más tarde.' : e.status === 502 ? 'El servicio de IA no está disponible ahora. Inténtalo en unos minutos.' : null));
+      }).then(function () { recalc.disabled = false; });
+    }
+    load(false);
+  }
+
+  // Unanswered: list ------------------------------------------------------------------------------------
   function viewUnanswered() {
     var tok = ++navToken;
     var list = h('div', null, loading());
     var more = h('div', { class: 'more' });
-    shell('unanswered', h('div', null, h('h1', null, 'Sin respuesta'),
+    shell('unanswered', h('div', null, h('h1', null, 'Sin respuesta'), subTabs('list'),
       h('p', { class: 'muted small' }, 'Respuestas con pulgar abajo, que pasaron a una persona o sin artículos de ayuda relacionados.'), list, more));
     function load(before) {
       api(P + '/unanswered' + qs({ before: before })).then(function (r) {
@@ -977,6 +1306,8 @@ export const PANEL_APP_JS = 'var PRODUCTS = ' + JSON.stringify(PRODUCT_NAMES) + 
     if ((m = /^\/c\/([A-Za-z0-9_-]{8,64})$/.exec(hash))) return viewDetail(m[1]);
     if (hash === '/leads') return viewLeads();
     if (hash === '/unanswered') return viewUnanswered();
+    if (hash === '/unanswered/gaps') return viewGaps();
+    if (hash === '/live') return viewLive();
     if (hash === '/settings') return viewSettings();
     location.replace('#/');
   }

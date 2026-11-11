@@ -13,11 +13,16 @@
 //   POST /api/handoff     the visitor asks for a person: bot -> waiting, alerts the team
 //   GET  /api/messages    the team's messages + state for a session (widget polling)
 //   POST /api/csat        the visitor's 1-5 rating of a resolved conversation (once)
+//   POST /api/presence    heartbeat of a visitor on a page (online now; returns team messages)
+//   POST /api/presence/leave   the page is closing (sendBeacon): drop the presence row
+//   POST /api/proactive/accept   the visitor opened a team-first message: it becomes a conversation
+//   GET  /api/triggers    active proactive-message rules (cached 300 s)
+//   POST /api/triggers/:id/event   {type: 'shown'|'opened'} counter for a rule
 //   /panel, /panel/api/*  team panel (PWA): Telegram-code login, stats, conversations, push
 //   GET  /fonts/*.woff2   Geist latin / latin-ext for the widget (CORS *)
 //   OPTIONS *             CORS preflight
 //   scheduled (cron)      reindexes Vectorize when the bundled KB changed;
-//                         once a day (03:00 UTC) purges old D1 rows
+//                         once a day (03:00 UTC) purges old D1 rows; every tick purges stale presence
 
 import { buildCorsHeaders, handlePreflight } from './cors';
 import {
@@ -34,6 +39,8 @@ import { alertLead, type NotifyEnv } from './notify';
 import { announceHandoff, announceHumanMessage, announceNewConversation, pushNewLead } from './announce';
 import { isStrongId, listLiveMessages, requestHandoff, saveCsat, takeLiveMessage } from './inbox';
 import { cleanCity, cleanCountry, parseUserAgent } from './device';
+import { acceptProactive, heartbeat, leave, purgeLive, type PresenceBody } from './presence';
+import { listPublicTriggers, recordTriggerEvent } from './triggers';
 import { isRateLimited } from './limit';
 import { handlePanel, type PanelEnv } from './panel';
 import { PRODUCT_NAMES, sanitizePage, type PageContext } from './page';
@@ -63,6 +70,7 @@ interface Env extends BrainEnv, NotifyEnv, RagEnv, StoreEnv, PanelEnv {
   CHAT_LIMITER?: RateLimit;
   LEAD_LIMITER?: RateLimit;
   VISIT_LIMITER?: RateLimit;
+  PRESENCE_LIMITER?: RateLimit; // heartbeats + leave beacons only (a 30 s beat per tab must not eat VISIT_LIMITER)
 }
 
 // KV key holding the hash of the kb-bundle that was last indexed successfully.
@@ -106,6 +114,11 @@ interface VisitRequestBody {
 interface HandoffRequestBody {
   sessionId?: unknown;
   lang?: unknown;
+}
+
+interface AcceptRequestBody {
+  presenceId?: unknown;
+  sessionId?: unknown;
 }
 
 interface CsatRequestBody {
@@ -155,6 +168,14 @@ function pickLang(url: URL, fallback: ChatMessage[] | null = null): 'en' | 'es' 
   if (q === 'es' || q === 'en') return q;
   if (fallback) return detectLanguage(fallback);
   return 'en';
+}
+
+function safeDecode(v: string): string {
+  try {
+    return decodeURIComponent(v);
+  } catch {
+    return '';
+  }
 }
 
 function clientLang(v: unknown): 'en' | 'es' | null {
@@ -500,6 +521,104 @@ export default {
       }
     }
 
+    // Visitors online: heartbeat from the widget (every 30 s while the page is visible).
+    // Answers the team messages waiting for this presence id. A beacon sends text/plain,
+    // which request.json() parses the same way.
+    if (request.method === 'POST' && url.pathname === '/api/presence') {
+      if (cors['access-control-allow-origin'] === 'null') {
+        return jsonResponse({ error: 'Origin not allowed' }, 403, cors);
+      }
+      if (!env.DB) return new Response(null, { status: 204, headers: cors });
+      let body: PresenceBody;
+      try {
+        body = (await request.json()) as PresenceBody;
+      } catch {
+        return jsonResponse({ error: 'Invalid JSON body' }, 400, cors);
+      }
+      if (await isRateLimited(env.PRESENCE_LIMITER, request)) return jsonResponse({ error: RATE_LIMIT_MSG.en }, 429, cors);
+      try {
+        const hb = await heartbeat(env, request, body);
+        return jsonResponse(hb, hb.ok ? 200 : 400, { ...cors, 'cache-control': 'no-store' });
+      } catch (e) {
+        console.error('presence failed:', (e as Error)?.message);
+        return jsonResponse({ ok: false, messages: [] }, 503, cors);
+      }
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/presence/leave') {
+      if (cors['access-control-allow-origin'] === 'null') {
+        return jsonResponse({ error: 'Origin not allowed' }, 403, cors);
+      }
+      const done = new Response(null, { status: 204, headers: cors });
+      let body: PresenceBody;
+      try {
+        body = (await request.json()) as PresenceBody;
+      } catch {
+        return done;
+      }
+      if (await isRateLimited(env.PRESENCE_LIMITER, request)) return done;
+      try {
+        await leave(env, body.presenceId);
+      } catch (e) {
+        console.error('presence leave failed:', (e as Error)?.message);
+      }
+      return done;
+    }
+
+    // The visitor opened a message the team wrote first: it becomes a conversation
+    // (role 'agent', mode 'human'). Nothing exists before this call.
+    if (request.method === 'POST' && url.pathname === '/api/proactive/accept') {
+      if (cors['access-control-allow-origin'] === 'null') {
+        return jsonResponse({ error: 'Origin not allowed' }, 403, cors);
+      }
+      let body: AcceptRequestBody;
+      try {
+        body = (await request.json()) as AcceptRequestBody;
+      } catch {
+        return jsonResponse({ error: 'Invalid JSON body' }, 400, cors);
+      }
+      if (!env.DB) return jsonResponse({ error: 'Unavailable' }, 503, cors);
+      if (await isRateLimited(env.VISIT_LIMITER, request)) return jsonResponse({ error: RATE_LIMIT_MSG.en }, 429, cors);
+      try {
+        const r = await acceptProactive(env, request, body.presenceId, body.sessionId);
+        return jsonResponse(r.data, r.status, { ...cors, 'cache-control': 'no-store' });
+      } catch (e) {
+        console.error('proactive accept failed:', (e as Error)?.message);
+        return jsonResponse({ error: 'Unavailable' }, 503, cors);
+      }
+    }
+
+    // Proactive-message rules for the widget (public fields only).
+    if (request.method === 'GET' && url.pathname === '/api/triggers') {
+      try {
+        return jsonResponse({ triggers: await listPublicTriggers(env) }, 200, { ...cors, 'cache-control': 'public, max-age=300' });
+      } catch (e) {
+        console.error('triggers list failed:', (e as Error)?.message);
+        return jsonResponse({ triggers: [] }, 200, { ...cors, 'cache-control': 'no-store' });
+      }
+    }
+
+    const triggerEvent = /^\/api\/triggers\/([^/]+)\/event$/.exec(url.pathname);
+    if (request.method === 'POST' && triggerEvent) {
+      if (cors['access-control-allow-origin'] === 'null') {
+        return jsonResponse({ error: 'Origin not allowed' }, 403, cors);
+      }
+      const done = new Response(null, { status: 204, headers: cors });
+      let body: { type?: unknown };
+      try {
+        body = (await request.json()) as { type?: unknown };
+      } catch {
+        return done;
+      }
+      if (await isRateLimited(env.VISIT_LIMITER, request)) return done;
+      try {
+        await recordTriggerEvent(env, safeDecode(triggerEvent[1]), body.type);
+      } catch (e) {
+        console.error('trigger event failed:', (e as Error)?.message);
+      }
+      return done;
+    }
+
     // Admin: (re)build the KB vector index from the bundled docs. Guarded by a
     // shared secret. Run after editing kb-bundle.json or on first setup.
     if (request.method === 'POST' && url.pathname === '/admin/reindex') {
@@ -621,11 +740,13 @@ export default {
     return jsonResponse({ error: 'Not found' }, 404, cors);
   },
 
-  // Cron (every 15 min): retention purge once a day, then the KB reindex check.
+  // Cron (every 15 min): stale presence, retention purge once a day, then the KB reindex check.
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
     // Once a day: only the 03:00 UTC tick (minute < 15) runs the purge.
     const at = new Date(controller.scheduledTime);
     if (at.getUTCHours() === 3 && at.getUTCMinutes() < 15) await purgeOld(env, controller.scheduledTime);
+    // Every tick: presence rows older than 15 minutes (and the team messages that went with them).
+    await purgeLive(env, controller.scheduledTime);
     await reindexIfChanged(env);
   },
 };

@@ -90,16 +90,20 @@ async function callGroq(
 
 // ─── Gemini fallback ────────────────────────────────────────────────────────
 
-function buildGeminiBody(systemPrompt: string, history: ChatMessage[]) {
+function buildGeminiBody(systemPrompt: string, history: ChatMessage[], maxOutputTokens = 600) {
+  const contents = history.map((m) => ({
+    role: m.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: m.content }],
+  }));
+  // A proactive teaser puts an assistant line before the visitor's first message;
+  // Gemini wants the conversation to open with a user turn.
+  if (contents.length && contents[0].role === 'model') contents.unshift({ role: 'user', parts: [{ text: '(The visitor opened the chat.)' }] });
   return {
     systemInstruction: { parts: [{ text: systemPrompt }] },
-    contents: history.map((m) => ({
-      role: m.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: m.content }],
-    })),
+    contents,
     generationConfig: {
       temperature: 0.5,
-      maxOutputTokens: 600,
+      maxOutputTokens,
     },
   };
 }
@@ -108,11 +112,12 @@ async function callGemini(
   env: BrainEnv,
   systemPrompt: string,
   history: ChatMessage[],
+  maxOutputTokens?: number,
 ): Promise<Response> {
   // Use the non-streaming endpoint and wrap the full response as a single
   // SSE frame. Simpler than re-streaming and avoids quirks of Gemini's SSE
   // alt mode when called from inside a Worker.
-  const body = buildGeminiBody(systemPrompt, history);
+  const body = buildGeminiBody(systemPrompt, history, maxOutputTokens);
   const url =
     'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent' +
     `?key=${encodeURIComponent(env.GEMINI_API_KEY)}`;
@@ -279,6 +284,7 @@ export async function completeReply(
   env: BrainEnv,
   systemPrompt: string,
   history: ChatMessage[],
+  opts: { maxTokens?: number } = {},
 ): Promise<{ text: string; provider: 'groq' | 'gemini' } | null> {
   try {
     const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -287,7 +293,7 @@ export async function completeReply(
       body: JSON.stringify({
         model: env.GROQ_MODEL,
         temperature: 0.4,
-        max_tokens: 1000,
+        max_tokens: opts.maxTokens ?? 1000,
         include_reasoning: false,
         reasoning_effort: 'low',
         stream: false,
@@ -306,7 +312,7 @@ export async function completeReply(
   }
   if (!env.GEMINI_API_KEY) return null;
   try {
-    const res = await callGemini(env, systemPrompt, history);
+    const res = await callGemini(env, systemPrompt, history, opts.maxTokens);
     if (!res.ok) {
       await res.body?.cancel().catch(() => {});
       return null;
