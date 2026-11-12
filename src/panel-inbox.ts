@@ -5,7 +5,7 @@
 // any of these run. Handlers return { status, data }; panel.ts turns that into a
 // Response. Every query uses bound parameters.
 
-import { detectLanguage, buildDraftPrompt, completeReply, type BrainEnv, type ChatMessage } from './brain';
+import { detectLanguage, messageLanguage, buildDraftPrompt, completeReply, type BrainEnv, type ChatMessage } from './brain';
 import { hit } from './limit';
 import { sendVisitorEmail, type NotifyEnv } from './notify';
 import { PRODUCT_NAMES, type Product } from './page';
@@ -382,7 +382,15 @@ export async function makeDraft(env: InboxEnv, id: string): Promise<Out> {
   if ((await hit(db, 'drafts', HOUR_MS)) > DRAFTS_PER_HOUR) return fail('rate_limited', 429);
 
   const asChat: ChatMessage[] = rows.map((m) => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content }));
-  const lang: 'en' | 'es' = conv.lang === 'es' || conv.lang === 'en' ? conv.lang : detectLanguage(asChat);
+  // The visitor's own words decide (newest of their last 3 messages that is clear); the
+  // page language (conv.lang) only when none is, e.g. "ok" or a product name.
+  const visitorLang = rows
+    .filter((m) => m.role === 'user')
+    .slice(-3)
+    .reverse()
+    .map((m) => messageLanguage(m.content))
+    .find((l) => l !== null);
+  const lang: 'en' | 'es' = visitorLang ?? (conv.lang === 'es' || conv.lang === 'en' ? conv.lang : detectLanguage(asChat));
   const product = conv.product && Object.prototype.hasOwnProperty.call(PRODUCT_NAMES, conv.product) ? (conv.product as Product) : null;
   const pageLine = product ? `The visitor is on the ${PRODUCT_NAMES[product]} pages. When a question is ambiguous, assume it is about that product.` : '';
 
@@ -396,7 +404,7 @@ export async function makeDraft(env: InboxEnv, id: string): Promise<Out> {
   const label = (r: string) => (r === 'user' ? 'Visitor' : r === 'agent' ? 'Team' : 'Assistant');
   const transcript = rows.map((m) => `${label(m.role)}: ${m.content.slice(0, MAX_TEXT)}`).join('\n\n');
   const out = await completeReply(env, buildDraftPrompt(chunks, lang, pageLine), [
-    { role: 'user', content: `Conversation so far:\n\n${transcript}\n\nWrite the team's next reply to the visitor's latest message.` },
+    { role: 'user', content: `Conversation so far:\n\n${transcript}\n\nWrite the team's next reply to the visitor's latest message. Write it in ${lang === 'es' ? 'Spanish' : 'English'}.` },
   ]);
   if (!out) return fail('draft_failed', 502);
   const text = out.text.replace(/\[\[HANDOFF\]\]/g, '').trim().slice(0, MAX_TEXT);

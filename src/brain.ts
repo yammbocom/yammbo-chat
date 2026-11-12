@@ -26,6 +26,33 @@ export function detectLanguage(messages: ChatMessage[]): Lang {
   return esMarkers.test(` ${text} `) ? 'es' : 'en';
 }
 
+const LANG_NAME: Record<Lang, string> = { es: 'Spanish', en: 'English' };
+
+// Language of a visitor's message by counting common function words of each language.
+// Accents alone are not evidence: "Café Martínez" or "La Paz" show up in English messages.
+// Returns null unless one side has at least 2 hits and more than the other: a bare
+// "El Paso", "Los Angeles" or "hola" must not override the page language.
+const ES_WORDS = new Set(
+  // Unaccented spellings too: visitors often type "cuanto cuesta". Words shared with
+  // English ("me", "no", "a", "has") are in neither list.
+  'de del que el los las un una unos es en por para con como cómo qué que cuál cual cuánto cuanto cuánta cuanta dónde donde cuándo cuando puedo puedes puede pueden podría podria podrían podrian tengo tiene tienen quiero quisiera necesito hola gracias está esta están estan son mi mis tu tus sí si más mas hay también tambien pero se al lo y o precio cuesta gratis envío envio funciona hacer ayuda ayudar interesa gustaría gustaria llamo buenas buenos días dias'.split(' '),
+);
+const EN_WORDS = new Set(
+  'the is are was what how can could i my you your do does did to of and or for with it this that have hi hello thanks thank where when why which there an in on about please price shipping work works want need'.split(' '),
+);
+export function messageLanguage(text: string): Lang | null {
+  const words = text.replace(/https?:\/\/\S+/gi, ' ').toLowerCase().split(/[^\p{L}]+/u).filter(Boolean);
+  let es = /[¿¡]/.test(text) ? 2 : 0;
+  let en = 0;
+  for (const w of words) {
+    if (ES_WORDS.has(w)) es++;
+    if (EN_WORDS.has(w)) en++;
+  }
+  if (es >= 2 && es > en) return 'es';
+  if (en >= 2 && en > es) return 'en';
+  return null;
+}
+
 // RAG path: prompt carries only the retrieved excerpts.
 export function buildSystemPrompt(chunks: KbChunk[], pageLine = ''): string {
   return BRAIN_CORE + (pageLine ? `\n\n${pageLine}` : '') + buildKbSectionFromChunks(chunks);
@@ -39,8 +66,13 @@ export function buildSystemPromptFull(lang: Lang, pageLine = ''): string {
 
 // Prompt for the panel's "suggest a reply" draft: same KB sections as the bot.
 // `chunks` null = retrieval failed, fall back to the title/URL index.
+// The reply language is stated explicitly: left to infer it, the model answered an
+// English visitor in Spanish (12-nov-2026, conversation lang 'en'), and it still did when
+// only told to "use the language of the visitor's latest message". So the caller decides
+// `lang` (see messageLanguage) and the prompt states it as a fixed fact.
 export function buildDraftPrompt(chunks: KbChunk[] | null, lang: Lang, pageLine = ''): string {
-  return DRAFT_CORE + (pageLine ? `\n\n${pageLine}` : '') + (chunks ? buildKbSectionFromChunks(chunks) : buildKbSection(KB[lang] || []));
+  const langLine = `Reply language: ${LANG_NAME[lang]}. The visitor writes in ${LANG_NAME[lang]}: write the whole draft in ${LANG_NAME[lang]}, even if the knowledge base excerpts are in another language.`;
+  return DRAFT_CORE + `\n\n${langLine}` + (pageLine ? `\n\n${pageLine}` : '') + (chunks ? buildKbSectionFromChunks(chunks) : buildKbSection(KB[lang] || []));
 }
 
 export interface BrainEnv {
