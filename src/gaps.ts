@@ -352,7 +352,8 @@ export function finishDraft(raw: string, today: string): FinishedDraft {
     }
     text = `---\n${lines.join('\n')}\n---${fm[2]}${text.slice(fm[0].length)}`;
   }
-  const todos = (text.match(/^\s*(?:[-*]\s+)?TODO:/gm) || []).length;
+  // Count every TODO: marker, including ones inside table cells or mid-sentence.
+  const todos = (text.match(/\bTODO:/g) || []).length;
   return { mdx: text, title, filename: `${slugify(title)}.mdx`, todos, warnings };
 }
 
