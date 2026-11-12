@@ -66,7 +66,7 @@ async function sendEmail(env: NotifyEnv, subject: string, html: string, to?: str
       'accept': 'application/json',
     },
     body: JSON.stringify({
-      from: { address: env.ZEPTOMAIL_FROM_EMAIL || 'noreply@yammbo.com', name: env.ZEPTOMAIL_FROM_NAME || 'Yammbo' },
+      from: { address: env.ZEPTOMAIL_FROM_EMAIL || 'support@yammbo.com', name: env.ZEPTOMAIL_FROM_NAME || 'Yammbo' },
       to: [{ email_address: { address: to || env.AGENT_ALERT_EMAIL || 'support@yammbo.com' } }],
       subject: subject.slice(0, 200),
       htmlbody: html,
