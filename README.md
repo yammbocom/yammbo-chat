@@ -108,6 +108,19 @@ Replies are also emailed to visitors who left an address, but only once `ZEPTOMA
 - Needs migration `migrations/0004_live.sql` (`wrangler d1 migrations apply yammbo-chat --remote`)
   applied BEFORE deploying: without it the panel Inicio fails (its stats query `presence`) and the new
   endpoints answer 503/500 (the chat itself keeps working). Update `src/privacy.ts` if what is stored changes.
+- Email copy of team replies (needs `ZEPTOMAIL_API_TOKEN`): decided by what the visitor's OPEN chat showed,
+  not by presence. The widget polls `GET /api/messages` every 10 s with the chat open in bot mode (4 s with
+  the team in charge; at most 60 s with backoff) and adds `open=1` only when the chat view is showing in a
+  visible tab and the panel is not hidden by the site's CSS. For such a poll the server stores the newest team
+  message it returned in `conversations.visitor_seen_at` (only when it moves forward). `postReply()` waits
+  15 s (debounce: a burst of replies sends one email, from the last one) and skips the email when a newer
+  team message exists or `visitor_seen_at >= ` that reply; the email lists only the team replies after
+  the visitor's last message and after `visitor_seen_at` (max 10). The ZeptoMail fetch has a 6 s timeout
+  (it runs inside `waitUntil`, about 30 s). The presence heartbeat replaces `session_id` on every beat (a beat
+  without `sessionId`, e.g. after "New conversation", unlinks the row). Needs migration
+  `migrations/0005_visitor_seen.sql` (`wrangler d1 migrations apply yammbo-chat --remote`) applied BEFORE
+  deploying: without the column the poll with `open=1`, and every `GET /api/messages`, fail (the query
+  reads `visitor_seen_at`), and the email check errors out (no email).
 
 Local testing without Telegram: put `PANEL_DEV_CODE="K7M2Q9XA"` (8 characters of the alphabet above)
 in `.dev.vars` (gitignored). It is only honoured for requests to localhost/127.0.0.1. Never set it as

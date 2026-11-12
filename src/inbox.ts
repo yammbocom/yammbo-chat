@@ -118,10 +118,14 @@ export interface LivePoll {
 // What the widget polls: the team's messages and system lines after `after`, plus
 // the state it needs (mode, rating request). Internal notes and tags are never
 // part of this. Null when the conversation does not exist.
-export async function listLiveMessages(env: StoreEnv, sessionId: string, after: number): Promise<LivePoll | null> {
+// `open` = the widget had the chat view open and visible when it asked (open=1): the team messages
+// returned are then recorded as shown (conversations.visitor_seen_at, the newest returned one),
+// and the email copy of a team reply (postReply) only covers what was not shown. Written only
+// when that moves forward, so an empty poll or the 1.5 s overlap re-sending a seen message writes nothing.
+export async function listLiveMessages(env: StoreEnv, sessionId: string, after: number, open = false): Promise<LivePoll | null> {
   const db = env.DB!;
   const res = await db.batch([
-    db.prepare('SELECT mode, status, csat, csat_requested FROM conversations WHERE id = ?').bind(sessionId),
+    db.prepare('SELECT mode, status, csat, csat_requested, visitor_seen_at FROM conversations WHERE id = ?').bind(sessionId),
     db
       .prepare(
         `SELECT id, role, content, created_at FROM messages
@@ -130,12 +134,30 @@ export async function listLiveMessages(env: StoreEnv, sessionId: string, after: 
       )
       .bind(sessionId, after),
   ]);
-  const conv = (res[0].results ?? [])[0] as { mode: Mode; status: string; csat: number | null; csat_requested: number } | undefined;
+  const conv = (res[0].results ?? [])[0] as
+    | { mode: Mode; status: string; csat: number | null; csat_requested: number; visitor_seen_at: number | null }
+    | undefined;
   if (!conv) return null;
+  const messages = (res[1].results ?? []) as LivePoll['messages'];
+  if (open) {
+    // Ordered by created_at ASC: the newest returned team message is the last 'agent' one.
+    const newest = messages.reduce((m, x) => (x.role === 'agent' && x.created_at > m ? x.created_at : m), 0);
+    if (newest > (conv.visitor_seen_at ?? 0)) {
+      try {
+        await db
+          .prepare('UPDATE conversations SET visitor_seen_at = MAX(COALESCE(visitor_seen_at, 0), ?1) WHERE id = ?2')
+          .bind(newest, sessionId)
+          .run();
+      } catch (e) {
+        // Not worth failing the poll: the worst case is one email for something the visitor saw.
+        console.error('visitor_seen_at failed:', (e as Error)?.message);
+      }
+    }
+  }
   return {
     mode: conv.mode,
     status: conv.status,
-    messages: (res[1].results ?? []) as LivePoll['messages'],
+    messages,
     csat: conv.csat_requested === 1 && conv.csat === null,
   };
 }

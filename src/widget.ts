@@ -694,7 +694,7 @@ export const WIDGET_JS = `(function () {
     // Opening the chat: the visitor sees everything pending, so the dot goes, and
     // the server is asked once whether the team took the conversation over.
     setDot(false);
-    if (hasConv() && Date.now() - lastPollAt > 3000) poll();
+    if (hasConv() && (Date.now() - lastPollAt > 3000 || !lastPollOpen)) poll();
     if (teamMsgs.length) acceptTeam();
     setTimeout(function () { input.focus(); }, 50);
   }
@@ -740,6 +740,7 @@ export const WIDGET_JS = `(function () {
     setDot(false);
     paintChat();
     paintLive();
+    beatNow(); // the presence row must stop pointing at the old conversation
     if (chatInput) chatInput.focus();
   }
   // Thumbs under an assistant answer. m is the chatLog entry (m.id, m.rating).
@@ -903,7 +904,10 @@ export const WIDGET_JS = `(function () {
       if (entry && entry.id) addThumbs(entry);
       if (hadHandoff) addHandoffButton();
     } catch (e) { typing.remove(); addNote(t.errNetwork, true); }
-    finally { busy = false; input.focus(); }
+    finally {
+      busy = false; input.focus();
+      schedulePoll(); // the conversation exists now: start the live check (chat open => every 10 s)
+    }
   }
   function stripHandoff(s) { return s.replace(/\\[\\[HANDOFF\\]\\]/g, '').trim(); }
   // History for the model: team messages count as assistant turns (the API only takes
@@ -1012,20 +1016,36 @@ export const WIDGET_JS = `(function () {
   // The server is asked for the team's messages only when it can matter:
   //   team in charge (waiting/human): every 4 s with the chat visible, 25 s otherwise
   //     (a dot on the bubble flags unread team messages);
-  //   assistant in charge: one check when the chat is opened, then every 60 s while it
-  //     stays open (to notice that the team took the conversation over);
+  //   assistant in charge: one check when the chat is opened, then every 10 s while it
+  //     stays open (to notice that the team took the conversation over and to show its
+  //     answer soon: the server decides on the email copy by what an open chat showed);
   //   never while the tab is hidden, and never without a conversation.
-  // Errors and 429s stretch the interval (x2 per failure, up to x8).
-  var pollTimer = null, pollBusy = false, pollFails = 0, lastPollAt = 0;
+  // Errors and 429s stretch the interval (x2 per failure, up to x8; at most 60 s while the chat is open).
+  // A poll sent with the chat view open and visible carries open=1: the server then records that
+  // the team messages it returns were shown (conversations.visitor_seen_at, see inbox.ts).
+  var pollTimer = null, pollBusy = false, pollFails = 0, lastPollAt = 0, lastPollOpen = false;
   // The visitor wrote (or the team did): there is a conversation on the server. A
   // history made only of a teaser line (see openTeaser) is not one.
   function started() { return chatLog.some(function (m) { return m.role === 'user' || m.role === 'agent'; }); }
   function hasConv() { return started() && canLive(); }
   function chatActive() { return isOpen() && topView().v === 'chat' && !!chatBody; }
+  // The visitor can read the conversation RIGHT NOW: chat view showing, tab visible, and the
+  // panel not hidden by the site's CSS (same test as bubbleVisible, applied to root and panel).
+  function panelVisible() {
+    try {
+      var rs = getComputedStyle(root), ps = getComputedStyle(panel);
+      if (rs.display === 'none' || rs.visibility === 'hidden' || ps.display === 'none' || ps.visibility === 'hidden') return false;
+      return panel.getClientRects().length > 0; // no boxes when it or an ancestor is display:none
+    } catch (_) { return false; }
+  }
+  function chatOpenNow() { return chatActive() && document.visibilityState === 'visible' && panelVisible(); }
   function pollDelay() {
     if (!hasConv()) return 0;
-    var base = liveMode === 'bot' ? (chatActive() ? 60000 : 0) : (chatActive() ? 4000 : 25000);
-    return base ? base * Math.min(8, Math.pow(2, pollFails)) : 0;
+    var open = chatActive();
+    var base = liveMode === 'bot' ? (open ? 10000 : 0) : (open ? 4000 : 25000);
+    if (!base) return 0;
+    var d = base * Math.min(8, Math.pow(2, pollFails));
+    return open ? Math.min(60000, d) : d;
   }
   function schedulePoll() {
     clearTimeout(pollTimer); pollTimer = null;
@@ -1038,9 +1058,10 @@ export const WIDGET_JS = `(function () {
     if (pollBusy || document.hidden || !hasConv()) return;
     pollBusy = true; lastPollAt = Date.now();
     var sid = sessionId();
+    lastPollOpen = chatOpenNow();
     try {
       // 1.5 s of overlap; messages are de-duplicated by id.
-      var res = await fetch(BASE + '/api/messages?sessionId=' + encodeURIComponent(sid) + '&after=' + Math.max(0, lastAt - 1500));
+      var res = await fetch(BASE + '/api/messages?sessionId=' + encodeURIComponent(sid) + '&after=' + Math.max(0, lastAt - 1500) + (lastPollOpen ? '&open=1' : ''));
       if (sid !== sessionId()) return; // a new conversation started meanwhile
       if (res.status === 404) { pollFails = 0; setMode('bot'); }
       else if (!res.ok) pollFails++;
@@ -1131,7 +1152,7 @@ export const WIDGET_JS = `(function () {
       return btoa(s).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '');
     } catch (_) { return null; }
   })();
-  var hbLast = 0, hbBusy = false, hbSent = false, acceptBusy = false;
+  var hbLast = 0, hbBusy = false, hbSent = false, acceptBusy = false, hbRedo = false, hbTimer = null;
   var IDLE_MS = 30 * 60000, lastAct = Date.now(), hbIdle = false;
   function onAct() { lastAct = Date.now(); if (hbIdle) { hbIdle = false; beat(); } }
   ['pointerdown', 'keydown', 'scroll', 'touchstart'].forEach(function (ev) { window.addEventListener(ev, onAct, { passive: true, capture: true }); });
@@ -1145,8 +1166,17 @@ export const WIDGET_JS = `(function () {
       return (h === 'yammbo.com' || h.slice(-11) === '.yammbo.com') ? '' : h;
     } catch (_) { return ''; }
   }
+  // An extra beat right away ("New conversation": the presence row must stop pointing at the
+  // old conversation), at most one per second (it waits out the rest of the second).
+  function beatNow() {
+    if (hbTimer) return;
+    var wait = 1000 - (Date.now() - hbLast);
+    if (wait <= 0) { beat(); return; }
+    hbTimer = setTimeout(function () { hbTimer = null; beat(); }, wait);
+  }
   async function beat() {
-    if (!presenceOn() || document.hidden || hbBusy) return;
+    if (!presenceOn() || document.hidden) return;
+    if (hbBusy) { hbRedo = true; return; }
     if (Date.now() - lastAct > IDLE_MS) { hbIdle = true; return; }
     hbBusy = true; hbLast = Date.now(); hbSent = true;
     try {
@@ -1157,10 +1187,13 @@ export const WIDGET_JS = `(function () {
       if (res.ok) { var j = await res.json(); if (j && Array.isArray(j.messages)) onTeamMessages(j.messages); }
     } catch (_) {}
     finally { hbBusy = false; }
+    if (hbRedo) { hbRedo = false; beatNow(); }
     tryTeamTeaser(); // a team message the bubble could not show earlier (bubble hidden on this page)
   }
   setInterval(function () { if (!document.hidden) beat(); }, 30000);
   setTimeout(beat, 800);
+  // Back from the back/forward cache: the leave beacon dropped the row, say we are here again.
+  window.addEventListener('pageshow', function (e) { if (e.persisted) beat(); });
   // Leaving: tell the server so the visitor stops being "online" right away (a beacon is a
   // simple text/plain POST, no preflight). If it never arrives the row just expires.
   window.addEventListener('pagehide', function () {

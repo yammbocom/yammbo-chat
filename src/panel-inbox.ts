@@ -28,6 +28,10 @@ const MAX_TAG_LEN = 24;
 const MAX_CANNED = 200;
 const DRAFTS_PER_HOUR = 60;
 const HOUR_MS = 3600_000;
+const MAX_EMAIL_REPLIES = 10;
+// Wait before deciding on the email copy, so a burst of replies becomes one email (the last one sends it).
+// waitUntil() keeps the Worker alive about 30 s after the response, so this must stay well under that.
+const EMAIL_DEBOUNCE_MS = 15_000;
 
 function str(v: unknown): string {
   return typeof v === 'string' ? v.replace(/\r\n?/g, '\n').trim() : '';
@@ -38,6 +42,36 @@ function str(v: unknown): string {
 // The team writes to the visitor. Writing in bot (or waiting) mode takes the
 // conversation over: mode -> 'human' plus a "the team joined" line. Also reopens a
 // resolved conversation and clears its unread counter (the agent is looking at it).
+// Whether the visitor should get the email copy of the team reply written at `agentAt`:
+// no when a newer team message exists (the last reply of a burst sends the email), and no when an
+// open chat already showed that reply (conversations.visitor_seen_at, set by GET /api/messages?open=1).
+export async function shouldEmailVisitor(db: D1Database, id: string, agentAt: number): Promise<boolean> {
+  const newer = await db
+    .prepare("SELECT 1 AS x FROM messages WHERE session_id = ? AND role = 'agent' AND created_at > ? LIMIT 1")
+    .bind(id, agentAt)
+    .first();
+  if (newer) return false;
+  const conv = await db.prepare('SELECT visitor_seen_at FROM conversations WHERE id = ?').bind(id).first<{ visitor_seen_at: number | null }>();
+  return !conv || (conv.visitor_seen_at ?? 0) < agentAt;
+}
+
+// The team replies the visitor has not seen: after their last message and after what an open chat
+// last showed them, oldest first, at most MAX_EMAIL_REPLIES (the newest ones).
+export async function unseenReplies(db: D1Database, id: string): Promise<string[]> {
+  const r = await db
+    .prepare(
+      `SELECT content FROM messages
+       WHERE session_id = ?1 AND role = 'agent'
+         AND created_at > MAX(
+           COALESCE((SELECT MAX(created_at) FROM messages WHERE session_id = ?1 AND role = 'user'), 0),
+           COALESCE((SELECT visitor_seen_at FROM conversations WHERE id = ?1), 0))
+       ORDER BY created_at DESC LIMIT ${MAX_EMAIL_REPLIES}`,
+    )
+    .bind(id)
+    .all<{ content: string }>();
+  return (r.results ?? []).map((x) => x.content).reverse();
+}
+
 export async function postReply(env: InboxEnv, ctx: ExecutionContext | undefined, id: string, body: { text?: unknown }): Promise<Out> {
   const db = env.DB!;
   const text = str(body.text);
@@ -72,7 +106,11 @@ export async function postReply(env: InboxEnv, ctx: ExecutionContext | undefined
   );
   await db.batch(stmts);
 
-  // Email copy for visitors who left an address. Inactive without ZEPTOMAIL_API_TOKEN.
+  // Email copy for visitors who left an address, only for what an open chat did not show them:
+  // 15 s after the reply (a burst of replies sends one email, from the last one) the visitor must
+  // not have seen it (the widget reports what its open chat showed through GET /api/messages?open=1;
+  // presence alone is not enough: with the chat closed the widget does not show anything). The
+  // email lists only the replies not seen yet. Inactive without ZEPTOMAIL_API_TOKEN.
   if (env.ZEPTOMAIL_API_TOKEN && ctx) {
     ctx.waitUntil(
       (async () => {
@@ -81,7 +119,12 @@ export async function postReply(env: InboxEnv, ctx: ExecutionContext | undefined
             .prepare('SELECT email FROM leads WHERE session_id = ? AND email IS NOT NULL AND email != \'\' ORDER BY created_at DESC LIMIT 1')
             .bind(id)
             .first<{ email: string }>();
-          if (lead?.email) await sendVisitorEmail(env, lead.email, conv.lang === 'en' ? 'en' : 'es', text, conv.page_url);
+          if (!lead?.email) return;
+          await new Promise((r) => setTimeout(r, EMAIL_DEBOUNCE_MS));
+          if (!(await shouldEmailVisitor(db, id, agentAt))) return;
+          const replies = await unseenReplies(db, id);
+          if (!replies.length) return; // the visitor wrote after it, or saw everything: nothing to email
+          await sendVisitorEmail(env, lead.email, conv.lang === 'en' ? 'en' : 'es', replies, conv.page_url);
         } catch (e) {
           console.error('visitor email failed:', (e as Error)?.message);
         }

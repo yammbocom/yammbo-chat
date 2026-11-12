@@ -79,11 +79,13 @@ export async function heartbeat(env: StoreEnv, request: Request, b: PresenceBody
   const ref = cleanReferrerHost(b.ref);
   const sid = isStrongId(b.sessionId) ? b.sessionId : null;
 
-  // session_id only sticks when that conversation exists (a made-up id links nothing).
+  // session_id only sticks when that conversation exists (a made-up id links nothing). It is
+  // replaced on every beat, not kept: after "New conversation" (or a beat without sessionId)
+  // the row must stop pointing at the old conversation.
   const touched = await db
     .prepare(
       `UPDATE presence SET url = ?2, title = ?3, lang = ?4, last_seen = ?5,
-         session_id = COALESCE((SELECT id FROM conversations WHERE id = ?6), session_id),
+         session_id = (SELECT id FROM conversations WHERE id = ?6),
          referrer_host = COALESCE(referrer_host, ?7)
        WHERE presence_id = ?1 RETURNING first_seen`,
     )
@@ -97,7 +99,8 @@ export async function heartbeat(env: StoreEnv, request: Request, b: PresenceBody
       .prepare(
         `INSERT INTO presence (presence_id, session_id, url, title, lang, country, city, device, os, browser, first_seen, last_seen, referrer_host)
          VALUES (?1, (SELECT id FROM conversations WHERE id = ?2), ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, ?12)
-         ON CONFLICT(presence_id) DO UPDATE SET url = excluded.url, title = excluded.title, lang = excluded.lang, last_seen = excluded.last_seen`,
+         ON CONFLICT(presence_id) DO UPDATE SET url = excluded.url, title = excluded.title, lang = excluded.lang, last_seen = excluded.last_seen,
+           session_id = excluded.session_id`,
       )
       .bind(
         id, sid, page.url, page.title, lang, cleanCountry(request.cf?.country), cleanCity(request.cf?.city),

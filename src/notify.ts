@@ -60,7 +60,9 @@ export async function sendTelegram(env: NotifyEnv, text: string): Promise<SendRe
 // (sendVisitorEmail). src/privacy.ts says so; if the token is removed, update it.
 async function sendEmail(env: NotifyEnv, mail: RenderedEmail, opts: { to?: string; replyTo?: string } = {}): Promise<SendResult> {
   if (!env.ZEPTOMAIL_API_TOKEN) return { ok: false, info: 'zeptomail_api_token_missing' };
-  const res = await fetch('https://api.zeptomail.com/v1.1/email', {
+  let res: Response;
+  try {
+    res = await fetch('https://api.zeptomail.com/v1.1/email', {
     method: 'POST',
     headers: {
       'authorization': env.ZEPTOMAIL_API_TOKEN, // ZeptoMail expects "Zoho-enczapikey <token>"
@@ -75,7 +77,13 @@ async function sendEmail(env: NotifyEnv, mail: RenderedEmail, opts: { to?: strin
       htmlbody: mail.html,
       textbody: mail.text,
     }),
-  });
+      // Never hang on the provider: the visitor email runs inside a ~30 s waitUntil and the
+      // lead alert is awaited by POST /api/lead. A timeout is reported, never thrown.
+      signal: AbortSignal.timeout(6000),
+    });
+  } catch (e) {
+    return { ok: false, info: `zeptomail_error: ${String((e as Error)?.name || e).slice(0, 80)}` };
+  }
   if (res.status >= 200 && res.status < 300) return { ok: true, info: 'sent' };
   const body = await res.text().catch(() => '');
   return { ok: false, info: `zeptomail_${res.status}: ${body.slice(0, 200)}` };
@@ -88,11 +96,11 @@ export async function sendVisitorEmail(
   env: NotifyEnv,
   to: string,
   lang: 'es' | 'en',
-  reply: string,
+  replies: string[],
   pageUrl?: string | null,
 ): Promise<SendResult> {
   if (!env.ZEPTOMAIL_API_TOKEN) return { ok: false, info: 'zeptomail_api_token_missing' };
-  return sendEmail(env, visitorReplyEmail(lang, reply, pageUrl), { to });
+  return sendEmail(env, visitorReplyEmail(lang, replies, pageUrl), { to });
 }
 
 async function sendWhatsApp(env: NotifyEnv, vars: string[]): Promise<SendResult> {

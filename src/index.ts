@@ -11,7 +11,7 @@
 //   POST /api/feedback    thumbs up/down on an assistant message
 //   POST /api/visit       page the visitor opened after using the chat (always 204)
 //   POST /api/handoff     the visitor asks for a person: bot -> waiting, alerts the team
-//   GET  /api/messages    the team's messages + state for a session (widget polling)
+//   GET  /api/messages    the team's messages + state for a session (widget polling; open=1 = chat open and visible)
 //   POST /api/csat        the visitor's 1-5 rating of a resolved conversation (once)
 //   POST /api/presence    heartbeat of a visitor on a page (online now; returns team messages)
 //   POST /api/presence/leave   the page is closing (sendBeacon): drop the presence row
@@ -486,7 +486,7 @@ export default {
       if (await isRateLimited(env.VISIT_LIMITER, request)) return jsonResponse({ error: RATE_LIMIT_MSG.en }, 429, cors);
       const after = Math.max(0, parseInt(url.searchParams.get('after') || '', 10) || 0);
       try {
-        const poll = await listLiveMessages(env, sid, after);
+        const poll = await listLiveMessages(env, sid, after, url.searchParams.get('open') === '1');
         if (!poll) return jsonResponse({ error: 'Unknown conversation' }, 404, cors);
         return jsonResponse(poll, 200, { ...cors, 'cache-control': 'no-store' });
       } catch (e) {

@@ -151,13 +151,19 @@ export function leadEmail({ fields, sessionId }: LeadEmailInput): RenderedEmail 
 
 // Team reply to a visitor ---------------------------------------------------------
 
-export function visitorReplyEmail(lang: 'es' | 'en', reply: string, pageUrl?: string | null): RenderedEmail {
+export function visitorReplyEmail(lang: 'es' | 'en', replies: string[], pageUrl?: string | null): RenderedEmail {
+  const many = replies.length > 1;
+  const reply = replies.join('\n\n');
   const es = lang === 'es';
   const back = (pageUrl && safeUrl(pageUrl)) || 'https://yammbo.com/';
-  const quote = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
-<td bgcolor="#050505" style="background:#050505;border:1px solid #1f1f1f;border-left:3px solid ${BLUE};border-radius:10px;padding:16px 18px;font:400 16px/1.6 ${FONT};color:#f2f2f2">${esc(reply).replace(/\n/g, '<br>')}</td></tr></table>`;
+  const quote = replies
+    .map(
+      (r) => `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 10px"><tr>
+<td bgcolor="#050505" style="background:#050505;border:1px solid #1f1f1f;border-left:3px solid ${BLUE};border-radius:10px;padding:16px 18px;font:400 16px/1.6 ${FONT};color:#f2f2f2">${esc(r).replace(/\n/g, '<br>')}</td></tr></table>`,
+    )
+    .join('');
   const intro = `<p style="margin:0 0 16px;font:400 16px/1.6 ${FONT};color:#bdbdbd">${
-    es ? 'El equipo de Yammbo te escribió en el chat:' : 'The Yammbo team wrote to you in the chat:'
+    es ? 'Mientras no estabas, el equipo de Yammbo te escribió en el chat:' : 'While you were away, the Yammbo team wrote to you in the chat:'
   }</p>`;
   const after = `<p style="margin:20px 0 0;font:400 14px/1.6 ${FONT};color:#8a8a8a">${
     es ? 'Puedes responder a este correo o seguir la conversación en el chat del sitio.' : 'You can reply to this email or continue the conversation in the site chat.'
@@ -166,7 +172,7 @@ export function visitorReplyEmail(lang: 'es' | 'en', reply: string, pageUrl?: st
     lang,
     preheader: reply.slice(0, 120),
     eyebrow: es ? 'Yammbo · Respuesta del equipo' : 'Yammbo · Team reply',
-    title: es ? 'Tienes una respuesta' : 'You have a reply',
+    title: es ? (many ? `Tienes ${replies.length} respuestas` : 'Tienes una respuesta') : many ? `You have ${replies.length} replies` : 'You have a reply',
     body: intro + quote + after,
     buttons: button(back, es ? 'Volver al chat' : 'Back to the chat', true),
     footer: es
@@ -174,7 +180,7 @@ export function visitorReplyEmail(lang: 'es' | 'en', reply: string, pageUrl?: st
       : `You get this email because you left your address in the Yammbo chat. <a href="${PRIVACY_URL}" style="color:#8a8a8a">Privacy</a> · support@yammbo.com`,
   });
   const text =
-    (es ? 'El equipo de Yammbo te escribió en el chat:\n\n' : 'The Yammbo team wrote to you in the chat:\n\n') +
+    (es ? 'Mientras no estabas, el equipo de Yammbo te escribió en el chat:\n\n' : 'While you were away, the Yammbo team wrote to you in the chat:\n\n') +
     reply +
     '\n\n' +
     (es ? `Responde a este correo o vuelve al chat: ${back}` : `Reply to this email or go back to the chat: ${back}`) +

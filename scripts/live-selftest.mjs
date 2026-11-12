@@ -3,7 +3,7 @@
 // - groupBySimilarity (Help Center gaps) with synthetic unit vectors
 // - deviceLabel / clientSummary (Spanish device names in the team alerts, no "Otro · Otro")
 // - normalizePattern / matchPattern (proactive rules) and parity of the widget's copy of the matcher
-// - acceptProactive / purgeLive against a real (in-memory, local) D1 from miniflare
+// - acceptProactive / purgeLive / heartbeat (session_id) / listLiveMessages (visitor_seen_at) / shouldEmailVisitor / unseenReplies against a real (in-memory, local) D1 from miniflare
 import { build } from 'esbuild';
 import { Miniflare } from 'miniflare';
 import { readFileSync } from 'node:fs';
@@ -96,10 +96,11 @@ check('widget matcher agrees with server on every case', parity);
 
 // --- presence: accept + retention against a local D1 ----------------------------------------------
 const presence = await load('src/presence.ts');
+const inbox = await load('src/panel-inbox.ts');
 const mf = new Miniflare({ modules: true, script: 'export default { fetch() { return new Response("ok"); } }', d1Databases: { DB: 'selftest' } });
 try {
   const DB = await mf.getD1Database('DB');
-  for (const f of ['0001_init', '0002_panel', '0003_inbox', '0004_live']) {
+  for (const f of ['0001_init', '0002_panel', '0003_inbox', '0004_live', '0005_visitor_seen']) {
     const sql = readFileSync(path.join(root, 'migrations', f + '.sql'), 'utf8').split('\n').map((l) => l.replace(/--.*$/, '')).join('\n');
     for (const st of sql.split(';').map((x) => x.trim()).filter(Boolean)) await DB.prepare(st).run();
   }
@@ -144,6 +145,103 @@ try {
   check('purgeLive keeps inbox < 1 h (created or delivered) without any presence row', left.join(',') === 'keep-delivered,keep-new', left.join(','));
   const pl = (await DB.prepare('SELECT presence_id FROM presence ORDER BY presence_id').all()).results.map((r) => r.presence_id);
   check('purgeLive drops presence older than 15 min, keeps the fresh one', pl.join(',') === 'fresh', pl.join(','));
+  // heartbeat: session_id follows the conversation of the LAST beat (no stale link)
+  const hbReq = () => new Request('https://chat.yammbo.com/api/presence', { method: 'POST', headers: { 'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) Chrome/120 Safari/537.36' } });
+  const HB = 'H'.repeat(22), HB2 = 'I'.repeat(22), HB3 = 'J'.repeat(22);
+  const page = { url: 'https://yammbo.com/pos', title: 'POS' };
+  const row = (pid) => DB.prepare('SELECT session_id, last_seen FROM presence WHERE presence_id = ?').bind(pid).first();
+  const t0 = now + 10 * 60_000;
+  await DB.prepare('INSERT INTO conversations (id, created_at, updated_at, mode, status) VALUES (?, ?, ?, ?, ?)').bind(SID2, t0, t0, 'human', 'open').run();
+  await presence.heartbeat(env, hbReq(), { presenceId: HB, sessionId: SID2, ...page }, t0);
+  let r = await row(HB);
+  check('heartbeat with an existing sessionId (insert) -> session linked', r.session_id === SID2, JSON.stringify(r));
+  await presence.heartbeat(env, hbReq(), { presenceId: HB, sessionId: SID2, ...page }, t0 + 30_000);
+  r = await row(HB);
+  check('heartbeat with the same sessionId (update) -> still linked', r.session_id === SID2, JSON.stringify(r));
+  await presence.heartbeat(env, hbReq(), { presenceId: HB, ...page }, t0 + 60_000);
+  r = await row(HB);
+  check('heartbeat without sessionId (after "New conversation") -> session_id NULL, no stale link', r.session_id === null, JSON.stringify(r));
+  await presence.heartbeat(env, hbReq(), { presenceId: HB2, sessionId: 'z'.repeat(40), ...page }, t0);
+  r = await row(HB2);
+  check('heartbeat with a made-up sessionId -> session_id NULL', r.session_id === null, JSON.stringify(r));
+  const online = await presence.listOnline(env, t0 + 2000);
+  check('listOnline still lists the visitors', online.status === 200 && online.data.items.length === 2 && online.data.items.some((i) => i.id === HB && i.sessionId === null), JSON.stringify(online.data.items.map((i) => i.id)));
+  const SID3 = 'u'.repeat(40);
+  await DB.prepare('INSERT INTO proactive_inbox (id, presence_id, text, created_at) VALUES (?, ?, ?, ?)').bind('m3', HB3, 'Hola de nuevo', t0).run();
+  await presence.heartbeat(env, hbReq(), { presenceId: HB3, ...page }, t0);
+  const r3 = await presence.acceptProactive(env, req(), HB3, SID3, t0 + 3000);
+  r = await row(HB3);
+  check('acceptProactive sets session_id on the presence row', r3.status === 200 && r.session_id === SID3, JSON.stringify(r));
+  await presence.heartbeat(env, hbReq(), { presenceId: HB3, sessionId: SID3, ...page }, t0 + 33_000);
+  r = await row(HB3);
+  check('the next beat after accepting carries the sessionId and keeps the link', r.session_id === SID3, JSON.stringify(r));
+
+  // visitor_seen_at: GET /api/messages?open=1 records what an open chat showed
+  const live = await load('src/inbox.ts');
+  await DB.exec('CREATE TABLE seen_writes (n INTEGER)');
+  await DB.exec('CREATE TRIGGER seen_w AFTER UPDATE OF visitor_seen_at ON conversations BEGIN INSERT INTO seen_writes VALUES (1); END');
+  const writes = async () => (await DB.prepare('SELECT COUNT(*) AS n FROM seen_writes').first()).n;
+  const seenAt = async (id) => (await DB.prepare('SELECT visitor_seen_at AS v FROM conversations WHERE id = ?').bind(id).first()).v;
+  const SP = 'p'.repeat(40), T = t0 + 3600_000;
+  await DB.prepare('INSERT INTO conversations (id, created_at, updated_at, mode, status) VALUES (?, ?, ?, ?, ?)').bind(SP, T, T, 'human', 'open').run();
+  const msg = DB.prepare('INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)');
+  await msg.bind('p-u0', SP, 'user', 'hola', T).run();
+  await msg.bind('p-a1', SP, 'agent', 'primera', T + 1000).run();
+  await msg.bind('p-sys', SP, 'system', 'sys', T + 1500).run();
+  check('visitor_seen_at starts NULL', (await seenAt(SP)) === null);
+  let w = await writes();
+  let pl1 = await live.listLiveMessages(env, SP, 0, false);
+  check('poll WITHOUT open returns the messages and does not change visitor_seen_at', pl1.messages.length === 2 && (await seenAt(SP)) === null && (await writes()) === w);
+  pl1 = await live.listLiveMessages(env, SP, 0, true);
+  check('poll with open=1 returning an agent message -> visitor_seen_at = its created_at', (await seenAt(SP)) === T + 1000, String(await seenAt(SP)));
+  w = await writes();
+  await live.listLiveMessages(env, SP, T + 1000 - 1500, true); // the 1.5 s overlap re-sends p-a1
+  check('poll with open=1 re-sending an already seen message -> no write', (await writes()) === w && (await seenAt(SP)) === T + 1000);
+  await live.listLiveMessages(env, SP, T + 5000, true);
+  check('empty poll with open=1 -> no write', (await writes()) === w);
+  await msg.bind('p-sys2', SP, 'system', 'sys2', T + 6000).run();
+  await live.listLiveMessages(env, SP, T + 5000, true);
+  check('poll with open=1 returning only a system line -> no write', (await writes()) === w && (await seenAt(SP)) === T + 1000);
+  await msg.bind('p-a2', SP, 'agent', 'segunda', T + 8000).run();
+  await live.listLiveMessages(env, SP, T + 7000, false);
+  check('new agent message polled WITHOUT open -> visitor_seen_at unchanged', (await seenAt(SP)) === T + 1000);
+  await live.listLiveMessages(env, SP, T + 7000, true);
+  check('same message polled with open=1 -> visitor_seen_at moves to it (one write)', (await seenAt(SP)) === T + 8000 && (await writes()) === w + 1, String(await seenAt(SP)));
+  check('unknown conversation -> null (open=1 changes nothing)', (await live.listLiveMessages(env, 'x'.repeat(40), 0, true)) === null);
+
+  // shouldEmailVisitor(db, id, agentAt): seen / not seen / newer team message
+  const SE = 'e'.repeat(40), E = T + 3600_000;
+  await DB.prepare('INSERT INTO conversations (id, created_at, updated_at, mode, status) VALUES (?, ?, ?, ?, ?)').bind(SE, E, E, 'human', 'open').run();
+  await msg.bind('e-a1', SE, 'agent', 'primera', E + 1000).run();
+  const should = (agentAt) => inbox.shouldEmailVisitor(DB, SE, agentAt);
+  check('shouldEmailVisitor: not seen (visitor_seen_at NULL) -> true', (await should(E + 1000)) === true);
+  await DB.prepare('UPDATE conversations SET visitor_seen_at = ? WHERE id = ?').bind(E + 500, SE).run();
+  check('shouldEmailVisitor: seen an older reply only -> true', (await should(E + 1000)) === true);
+  await DB.prepare('UPDATE conversations SET visitor_seen_at = ? WHERE id = ?').bind(E + 1000, SE).run();
+  check('shouldEmailVisitor: seen this reply (visitor_seen_at >= agentAt) -> false', (await should(E + 1000)) === false);
+  await DB.prepare('UPDATE conversations SET visitor_seen_at = NULL WHERE id = ?').bind(SE).run();
+  await msg.bind('e-a2', SE, 'agent', 'segunda', E + 9000).run();
+  check('shouldEmailVisitor: a newer team message exists -> false (the last of the burst sends)', (await should(E + 1000)) === false);
+  check('shouldEmailVisitor: the newest message of the burst, not seen -> true', (await should(E + 9000)) === true);
+
+  // unseenReplies: only the replies after the visitor's last message and after visitor_seen_at
+  const SR = 'r'.repeat(40), R = E + 3600_000;
+  await DB.prepare('INSERT INTO conversations (id, created_at, updated_at, mode, status) VALUES (?, ?, ?, ?, ?)').bind(SR, R, R, 'human', 'open').run();
+  await msg.bind('r-u', SR, 'user', 'q', R).run();
+  for (let i = 1; i <= 3; i++) await msg.bind('r-a' + i, SR, 'agent', 'resp' + i, R + i * 1000).run();
+  const ur = () => inbox.unseenReplies(DB, SR);
+  check('unseenReplies: nothing seen -> all three, oldest first', (await ur()).join(',') === 'resp1,resp2,resp3', (await ur()).join(','));
+  await DB.prepare('UPDATE conversations SET visitor_seen_at = ? WHERE id = ?').bind(R + 2000, SR).run();
+  check('unseenReplies: the open chat showed up to resp2 -> only resp3', (await ur()).join(',') === 'resp3', (await ur()).join(','));
+  await msg.bind('r-u2', SR, 'user', 'q2', R + 2500).run();
+  check('unseenReplies: a visitor message (R+2500) after seen (R+2000) -> still only resp3', (await ur()).join(',') === 'resp3', (await ur()).join(','));
+  await DB.prepare('UPDATE conversations SET visitor_seen_at = NULL WHERE id = ?').bind(SR).run();
+  check('unseenReplies: no visitor_seen_at -> counted from the last visitor message (resp3 only)', (await ur()).join(',') === 'resp3', (await ur()).join(','));
+  const SC = 'c'.repeat(40), C = R + 3600_000;
+  await DB.prepare('INSERT INTO conversations (id, created_at, updated_at, mode, status) VALUES (?, ?, ?, ?, ?)').bind(SC, C, C, 'human', 'open').run();
+  for (let i = 1; i <= 12; i++) await msg.bind('c-a' + i, SC, 'agent', 'r' + String(i).padStart(2, '0'), C + i * 1000).run();
+  const capped = await inbox.unseenReplies(DB, SC);
+  check('unseenReplies: at most 10, the newest, oldest first', capped.length === 10 && capped[0] === 'r03' && capped[9] === 'r12', capped.join(','));
 } catch (e) {
   failed++; console.log('FAIL presence/D1 section -> ' + (e && e.stack || e));
 } finally {
