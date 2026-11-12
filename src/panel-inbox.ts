@@ -42,7 +42,10 @@ export async function postReply(env: InboxEnv, ctx: ExecutionContext | undefined
   const db = env.DB!;
   const text = str(body.text);
   if (!text || text.length > MAX_TEXT) return fail('invalid_text', 400);
-  const conv = await db.prepare('SELECT mode, lang FROM conversations WHERE id = ?').bind(id).first<{ mode: Mode; lang: string | null }>();
+  const conv = await db
+    .prepare('SELECT mode, lang, page_url FROM conversations WHERE id = ?')
+    .bind(id)
+    .first<{ mode: Mode; lang: string | null; page_url: string | null }>();
   if (!conv) return fail('not_found', 404);
   // Short (legacy) ids cannot go live: the widget would never see the answer.
   if (!isStrongId(id)) return fail('legacy_session', 409);
@@ -78,7 +81,7 @@ export async function postReply(env: InboxEnv, ctx: ExecutionContext | undefined
             .prepare('SELECT email FROM leads WHERE session_id = ? AND email IS NOT NULL AND email != \'\' ORDER BY created_at DESC LIMIT 1')
             .bind(id)
             .first<{ email: string }>();
-          if (lead?.email) await sendVisitorEmail(env, lead.email, conv.lang === 'en' ? 'en' : 'es', text);
+          if (lead?.email) await sendVisitorEmail(env, lead.email, conv.lang === 'en' ? 'en' : 'es', text, conv.page_url);
         } catch (e) {
           console.error('visitor email failed:', (e as Error)?.message);
         }

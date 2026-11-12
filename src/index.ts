@@ -724,7 +724,11 @@ export default {
       };
       if (page) fields['Página'] = page.url;
 
-      const results = await alertLead(env, { title: 'Nuevo lead desde el chat web', fields });
+      const results = await alertLead(env, {
+        title: 'Nuevo lead desde el chat web',
+        fields,
+        sessionId: isValidId(body.sessionId) ? body.sessionId : null,
+      });
       const anyOk = Object.values(results).some((r) => r.ok);
       if (saved) await saveLeadNotify(env, leadId, results);
       ctx.waitUntil(pushNewLead(env, name, channel));

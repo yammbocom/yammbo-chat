@@ -23,6 +23,8 @@ export interface NotifyEnv {
 
 export type SendResult = { ok: boolean; info: string };
 
+import { leadEmail, SAFE_EMAIL_RE, visitorReplyEmail, type RenderedEmail } from './email';
+
 export function escapeHtml(s: unknown): string {
   return String(s ?? '—').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -56,7 +58,7 @@ export async function sendTelegram(env: NotifyEnv, text: string): Promise<SendRe
 // ZEPTOMAIL_API_TOKEN is set (since 12-nov-2026): lead details are emailed to the team
 // (AGENT_ALERT_EMAIL) and the team's live replies to visitors who left an email
 // (sendVisitorEmail). src/privacy.ts says so; if the token is removed, update it.
-async function sendEmail(env: NotifyEnv, subject: string, html: string, to?: string): Promise<SendResult> {
+async function sendEmail(env: NotifyEnv, mail: RenderedEmail, opts: { to?: string; replyTo?: string } = {}): Promise<SendResult> {
   if (!env.ZEPTOMAIL_API_TOKEN) return { ok: false, info: 'zeptomail_api_token_missing' };
   const res = await fetch('https://api.zeptomail.com/v1.1/email', {
     method: 'POST',
@@ -67,9 +69,11 @@ async function sendEmail(env: NotifyEnv, subject: string, html: string, to?: str
     },
     body: JSON.stringify({
       from: { address: env.ZEPTOMAIL_FROM_EMAIL || 'support@yammbo.com', name: env.ZEPTOMAIL_FROM_NAME || 'Yammbo' },
-      to: [{ email_address: { address: to || env.AGENT_ALERT_EMAIL || 'support@yammbo.com' } }],
-      subject: subject.slice(0, 200),
-      htmlbody: html,
+      to: [{ email_address: { address: opts.to || env.AGENT_ALERT_EMAIL || 'support@yammbo.com' } }],
+      ...(opts.replyTo ? { reply_to: [{ address: opts.replyTo }] } : {}),
+      subject: mail.subject.slice(0, 200),
+      htmlbody: mail.html,
+      textbody: mail.text,
     }),
   });
   if (res.status >= 200 && res.status < 300) return { ok: true, info: 'sent' };
@@ -80,14 +84,15 @@ async function sendEmail(env: NotifyEnv, subject: string, html: string, to?: str
 // Sends the team's reply to a visitor who left an email. Inactive (no-op) while
 // there is no ZEPTOMAIL_API_TOKEN. The reply text is untrusted-by-construction
 // (typed in the panel) and is escaped like every other value here.
-export async function sendVisitorEmail(env: NotifyEnv, to: string, lang: 'es' | 'en', reply: string): Promise<SendResult> {
+export async function sendVisitorEmail(
+  env: NotifyEnv,
+  to: string,
+  lang: 'es' | 'en',
+  reply: string,
+  pageUrl?: string | null,
+): Promise<SendResult> {
   if (!env.ZEPTOMAIL_API_TOKEN) return { ok: false, info: 'zeptomail_api_token_missing' };
-  const es = lang === 'es';
-  const html =
-    `<p style="margin:0 0 12px">${es ? 'El equipo de Yammbo te respondió en el chat:' : 'The Yammbo team replied to you in the chat:'}</p>` +
-    `<blockquote style="margin:0 0 16px;padding:8px 14px;border-left:3px solid #1160d8;white-space:pre-wrap">${escapeHtml(reply)}</blockquote>` +
-    `<p style="color:#666;font-size:13px">${es ? 'Puedes seguir la conversación en el chat del sitio o escribir a' : 'You can continue in the site chat or write to'} support@yammbo.com</p>`;
-  return sendEmail(env, es ? 'Respuesta del equipo de Yammbo' : 'Reply from the Yammbo team', html, to);
+  return sendEmail(env, visitorReplyEmail(lang, reply, pageUrl), { to });
 }
 
 async function sendWhatsApp(env: NotifyEnv, vars: string[]): Promise<SendResult> {
@@ -126,26 +131,19 @@ async function sendWhatsApp(env: NotifyEnv, vars: string[]): Promise<SendResult>
 export interface LeadAlert {
   title: string;
   fields: Record<string, string>;
+  sessionId?: string | null;
 }
 
 // Fires all three channels in parallel. Best-effort: a failure in one does
 // not block the others. Returns per-channel results for logging.
-export async function alertLead(env: NotifyEnv, { title, fields }: LeadAlert): Promise<Record<string, SendResult>> {
+// The email's Reply-To is the visitor's address, so answering it writes to them.
+export async function alertLead(env: NotifyEnv, { title, fields, sessionId }: LeadAlert): Promise<Record<string, SendResult>> {
   const tgLines = [
     `<b>🟢 ${escapeHtml(title)}</b>`,
     ...Object.entries(fields).map(([k, v]) => `<b>${escapeHtml(k)}:</b> ${renderValue(v, 'telegram')}`),
   ];
-
-  const emailHtml =
-    `<h2 style="margin:0">${escapeHtml(title)}</h2>` +
-    `<table style="border-collapse:collapse;margin-top:8px">` +
-    Object.entries(fields)
-      .map(
-        ([k, v]) =>
-          `<tr><td style="padding:4px 12px 4px 0;color:#666;vertical-align:top">${escapeHtml(k)}</td><td style="padding:4px 0"><strong>${renderValue(v, 'email')}</strong></td></tr>`,
-      )
-      .join('') +
-    `</table><p style="color:#888;font-size:12px;margin-top:24px">Yammbo Chat · ${new Date().toISOString()}</p>`;
+  const visitorEmail = (fields['Email'] || '').trim();
+  const replyTo = SAFE_EMAIL_RE.test(visitorEmail) ? visitorEmail : undefined;
 
   // WhatsApp template yammbo_agent_alert positional vars:
   // {{1}}=title {{2}}=platform {{3}}=cliente {{4}}=datos {{5}}=link
@@ -158,7 +156,7 @@ export async function alertLead(env: NotifyEnv, { title, fields }: LeadAlert): P
 
   const [telegram, email, whatsapp] = await Promise.all([
     sendTelegram(env, tgLines.join('\n')),
-    sendEmail(env, `[Yammbo Chat] ${title}`, emailHtml),
+    sendEmail(env, leadEmail({ fields, sessionId }), { replyTo }),
     sendWhatsApp(env, waVars),
   ]);
 
