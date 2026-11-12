@@ -95,7 +95,7 @@ WHATSAPP_ALERT_TEMPLATE_NAME = "yammbo_agent_alert"
 WHATSAPP_ALERT_TEMPLATE_LANG = "es"
 ZEPTOMAIL_FROM_EMAIL = "noreply@yammbo.com"
 ZEPTOMAIL_FROM_NAME = "Yammbo"
-AGENT_ALERT_EMAIL = "frank@yammbo.com"
+AGENT_ALERT_EMAIL = "support@yammbo.com"
 
 [observability]
 enabled = true

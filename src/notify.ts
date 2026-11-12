@@ -53,10 +53,9 @@ export async function sendTelegram(env: NotifyEnv, text: string): Promise<SendRe
   return { ok: false, info: `telegram_${res.status}: ${body.slice(0, 200)}` };
 }
 
-// NOTE: no ZEPTOMAIL_API_TOKEN is configured today, so this channel is inactive and
-// src/privacy.ts does not mention email. If the token is ever set, update
-// privacy.ts: lead details would then also be emailed to the team, and the team's
-// live replies would be emailed to visitors who left an email (sendVisitorEmail).
+// ZEPTOMAIL_API_TOKEN is set (since 12-nov-2026): lead details are emailed to the team
+// (AGENT_ALERT_EMAIL) and the team's live replies to visitors who left an email
+// (sendVisitorEmail). src/privacy.ts says so; if the token is removed, update it.
 async function sendEmail(env: NotifyEnv, subject: string, html: string, to?: string): Promise<SendResult> {
   if (!env.ZEPTOMAIL_API_TOKEN) return { ok: false, info: 'zeptomail_api_token_missing' };
   const res = await fetch('https://api.zeptomail.com/v1.1/email', {
@@ -68,7 +67,7 @@ async function sendEmail(env: NotifyEnv, subject: string, html: string, to?: str
     },
     body: JSON.stringify({
       from: { address: env.ZEPTOMAIL_FROM_EMAIL || 'noreply@yammbo.com', name: env.ZEPTOMAIL_FROM_NAME || 'Yammbo' },
-      to: [{ email_address: { address: to || env.AGENT_ALERT_EMAIL || 'frank@yammbo.com' } }],
+      to: [{ email_address: { address: to || env.AGENT_ALERT_EMAIL || 'support@yammbo.com' } }],
       subject: subject.slice(0, 200),
       htmlbody: html,
     }),
