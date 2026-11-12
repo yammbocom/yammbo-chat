@@ -15,6 +15,9 @@ export interface NotifyEnv {
   WHATSAPP_ALERT_TEMPLATE_NAME?: string;
   WHATSAPP_ALERT_TEMPLATE_LANG?: string;
   YAMMBO_PERSONAL_WHATSAPP?: string;
+  // '1' turns the WhatsApp lead alert back on. Off since 12-nov-2026: the number was tied
+  // to a removed BSP and every send failed ("Viewer cannot access Paid Message Account").
+  WHATSAPP_LEAD_ALERTS?: string;
   ZEPTOMAIL_API_TOKEN?: string;
   ZEPTOMAIL_FROM_EMAIL?: string;
   ZEPTOMAIL_FROM_NAME?: string;
@@ -142,7 +145,7 @@ export interface LeadAlert {
   sessionId?: string | null;
 }
 
-// Fires all three channels in parallel. Best-effort: a failure in one does
+// Fires the channels in parallel (WhatsApp only when WHATSAPP_LEAD_ALERTS is '1'). Best-effort: a failure in one does
 // not block the others. Returns per-channel results for logging.
 // The email's Reply-To is the visitor's address, so answering it writes to them.
 export async function alertLead(env: NotifyEnv, { title, fields, sessionId }: LeadAlert): Promise<Record<string, SendResult>> {
@@ -165,8 +168,9 @@ export async function alertLead(env: NotifyEnv, { title, fields, sessionId }: Le
   const [telegram, email, whatsapp] = await Promise.all([
     sendTelegram(env, tgLines.join('\n')),
     sendEmail(env, leadEmail({ fields, sessionId }), { replyTo }),
-    sendWhatsApp(env, waVars),
+    env.WHATSAPP_LEAD_ALERTS === '1' ? sendWhatsApp(env, waVars) : null,
   ]);
 
-  return { telegram, email, whatsapp };
+  // A disabled channel is left out, so the panel shows no ✗ whatsapp badge for it.
+  return whatsapp ? { telegram, email, whatsapp } : { telegram, email };
 }

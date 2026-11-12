@@ -77,7 +77,7 @@ export async function announceNewConversation(env: AnnounceEnv, c: NewConversati
   }
 }
 
-// Web Push for a new lead. The Telegram/WhatsApp alert is sent by alertLead.
+// Web Push for a new lead. The Telegram/email alert is sent by alertLead.
 export async function pushNewLead(env: PushEnv, name: string, channel: string): Promise<void> {
   await sendPushToAll(env, {
     title: '🟢 Nuevo contacto',
